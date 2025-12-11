@@ -236,7 +236,8 @@ app.post('/api/clear', (_req: Request, res: Response) => {
 app.get('/api/tracks', (req: Request, res: Response) => {
     try {
         const page = parseInt(req.query.page as string) || 1;
-        const limit = parseInt(req.query.limit as string) || 50;
+        // Default to 100000 (effectively unlimited) if no limit specified
+        const limit = parseInt(req.query.limit as string) || 100000;
         const offset = (page - 1) * limit;
 
         const tracks = db.prepare(`
@@ -263,10 +264,13 @@ app.get('/api/tracks', (req: Request, res: Response) => {
     }
 });
 
-// 5. Serve Album Artwork
+// 5. Serve Album Artwork with caching
 app.get('/api/art/:trackId', (req: Request, res: Response) => {
     const artPath = path.join(ART_DIR, `${req.params.trackId}.jpg`);
     if (fs.existsSync(artPath)) {
+        // Cache for 1 day - album art rarely changes
+        res.set('Cache-Control', 'public, max-age=86400, immutable');
+        res.set('ETag', `art-${req.params.trackId}`);
         res.sendFile(artPath);
     } else {
         res.status(404).send('No artwork');
@@ -405,10 +409,17 @@ app.post('/api/favorite', (req: Request, res: Response) => {
     }
 });
 
-// 10. Start MusicBrainz Enrichment
+// 10. Start MusicBrainz Enrichment (legacy per-track)
 app.post('/api/enrich', async (_req: Request, res: Response) => {
     musicbrainz.startEnrichment();
     res.json({ message: 'Enrichment started' });
+});
+
+// 10a. Fast album-based enrichment (recommended for large libraries)
+app.post('/api/enrich/fast', async (req: Request, res: Response) => {
+    const workerCount = parseInt(req.body?.workers as string) || 3;
+    musicbrainz.startAlbumEnrichment(workerCount);
+    res.json({ message: `Fast album-based enrichment started with ${workerCount} workers` });
 });
 
 // 10b. Bulk enrich artist bios (Wikipedia + Last.fm)
@@ -416,13 +427,13 @@ app.post('/api/enrich/artists', async (_req: Request, res: Response) => {
     try {
         // Get all artists without descriptions
         const artists = db.prepare('SELECT * FROM artists WHERE description IS NULL OR description = ""').all() as Artist[];
-        
+
         if (artists.length === 0) {
             return res.json({ message: 'No artists need enrichment' });
         }
 
         console.log(`Starting bulk enrichment for ${artists.length} artists...`);
-        
+
         let enriched = 0;
         let errors = 0;
 
@@ -482,17 +493,17 @@ app.get('/api/artist/:identifier', async (req: Request, res: Response) => {
 
         // Try MBID first, then fallback to name
         let localArtist = db.prepare('SELECT * FROM artists WHERE mbid = ?').get(identifier) as Artist | undefined;
-        
+
         if (!localArtist) {
             localArtist = db.prepare('SELECT * FROM artists WHERE name = ? COLLATE NOCASE').get(identifier) as Artist | undefined;
         }
-        
+
         if (!localArtist) return res.status(404).json({ error: 'Artist not found' });
 
         // Enrich if missing description
         if (!localArtist.description) {
             console.log(`Enriching artist: ${localArtist.name}`);
-            
+
             // Try Last.fm first if API key is available
             if (process.env.LASTFM_API_KEY) {
                 try {
@@ -792,6 +803,19 @@ app.get('/api/playlists/featured', (_req: Request, res: Response) => {
     res.json(playlists);
 });
 
+// Get playlists pinned to homepage (MUST be before :id route!)
+app.get('/api/playlists/home', (_req: Request, res: Response) => {
+    const playlists = db.prepare(`
+        SELECT p.*, 
+               (SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = p.id) as track_count,
+               (SELECT t.id FROM playlist_tracks pt JOIN tracks t ON pt.track_id = t.id WHERE pt.playlist_id = p.id AND t.has_art = 1 LIMIT 1) as cover_track_id
+        FROM playlists p 
+        WHERE p.pinned_to_home = 1 
+        ORDER BY p.updated_at DESC
+    `).all();
+    res.json(playlists);
+});
+
 // Get playlist with tracks
 app.get('/api/playlists/:id', (req: Request, res: Response) => {
     const { id } = req.params;
@@ -824,6 +848,10 @@ app.post('/api/playlists/:id/tracks', (req: Request, res: Response) => {
     const { trackId } = req.body;
     if (!trackId) return res.status(400).json({ error: 'trackId required' });
 
+    // Check if track already in playlist
+    const existing = db.prepare('SELECT id FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?').get(id, trackId);
+    if (existing) return res.json({ success: true, message: 'Track already in playlist' });
+
     const maxPos = db.prepare('SELECT MAX(position) as max FROM playlist_tracks WHERE playlist_id = ?').get(id) as { max: number | null };
     const position = (maxPos?.max || 0) + 1;
 
@@ -833,11 +861,374 @@ app.post('/api/playlists/:id/tracks', (req: Request, res: Response) => {
     res.json({ success: true, position });
 });
 
+// Add multiple tracks to playlist at once
+app.post('/api/playlists/:id/tracks/batch', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { trackIds } = req.body;
+    if (!Array.isArray(trackIds) || trackIds.length === 0) {
+        return res.status(400).json({ error: 'trackIds array required' });
+    }
+
+    const maxPos = db.prepare('SELECT MAX(position) as max FROM playlist_tracks WHERE playlist_id = ?').get(id) as { max: number | null };
+    let position = (maxPos?.max || 0);
+
+    const insertStmt = db.prepare('INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)');
+    const txn = db.transaction(() => {
+        for (const trackId of trackIds) {
+            position++;
+            insertStmt.run(id, trackId, position);
+        }
+        db.prepare('UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+    });
+    txn();
+
+    res.json({ success: true, added: trackIds.length });
+});
+
+// Remove track from playlist
+app.delete('/api/playlists/:id/tracks/:trackId', (req: Request, res: Response) => {
+    const { id, trackId } = req.params;
+    db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?').run(id, trackId);
+    db.prepare('UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+    res.json({ success: true });
+});
+
+// Reorder track in playlist
+app.put('/api/playlists/:id/tracks/reorder', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { trackId, newPosition } = req.body;
+    if (!trackId || newPosition === undefined) {
+        return res.status(400).json({ error: 'trackId and newPosition required' });
+    }
+
+    // Get current position
+    const current = db.prepare('SELECT position FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?').get(id, trackId) as { position: number } | undefined;
+    if (!current) return res.status(404).json({ error: 'Track not found in playlist' });
+
+    const oldPosition = current.position;
+
+    // Shift other tracks
+    const txn = db.transaction(() => {
+        if (newPosition > oldPosition) {
+            // Moving down: shift tracks between old and new positions up
+            db.prepare('UPDATE playlist_tracks SET position = position - 1 WHERE playlist_id = ? AND position > ? AND position <= ?')
+                .run(id, oldPosition, newPosition);
+        } else {
+            // Moving up: shift tracks between new and old positions down  
+            db.prepare('UPDATE playlist_tracks SET position = position + 1 WHERE playlist_id = ? AND position >= ? AND position < ?')
+                .run(id, newPosition, oldPosition);
+        }
+        // Set new position for target track
+        db.prepare('UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?')
+            .run(newPosition, id, trackId);
+        db.prepare('UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+    });
+    txn();
+
+    res.json({ success: true });
+});
+
 // Delete playlist
 app.delete('/api/playlists/:id', (req: Request, res: Response) => {
     const { id } = req.params;
     db.prepare('DELETE FROM playlists WHERE id = ?').run(id);
     res.json({ success: true });
+});
+
+// Update playlist (including pinning to home)
+app.put('/api/playlists/:id', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { name, description, pinned_to_home, type, rules, cover_art_path } = req.body;
+
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (name !== undefined) { updates.push('name = ?'); values.push(name); }
+    if (description !== undefined) { updates.push('description = ?'); values.push(description); }
+    if (pinned_to_home !== undefined) { updates.push('pinned_to_home = ?'); values.push(pinned_to_home ? 1 : 0); }
+    if (type !== undefined) { updates.push('type = ?'); values.push(type); }
+    if (rules !== undefined) { updates.push('rules = ?'); values.push(JSON.stringify(rules)); }
+    if (cover_art_path !== undefined) { updates.push('cover_art_path = ?'); values.push(cover_art_path); }
+
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(id);
+
+    db.prepare(`UPDATE playlists SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    res.json({ success: true });
+});
+
+// ========== PLAY HISTORY ENDPOINTS ==========
+
+// Record a play
+app.post('/api/history', (req: Request, res: Response) => {
+    const { trackId } = req.body;
+    if (!trackId) return res.status(400).json({ error: 'trackId required' });
+
+    db.prepare('INSERT INTO listening_history (track_id) VALUES (?)').run(trackId);
+    res.json({ success: true });
+});
+
+// Get play history (paginated)
+app.get('/api/history', (req: Request, res: Response) => {
+    const limit = parseInt(req.query.limit as string) || 50;
+    const offset = parseInt(req.query.offset as string) || 0;
+
+    const history = db.prepare(`
+        SELECT h.id, h.played_at, t.*
+        FROM listening_history h
+        JOIN tracks t ON h.track_id = t.id
+        ORDER BY h.played_at DESC
+        LIMIT ? OFFSET ?
+    `).all(limit, offset);
+
+    res.json(history);
+});
+
+// ========== HOMEPAGE DATA ENDPOINTS ==========
+
+// Get recently added albums (grouped by album)
+app.get('/api/home/albums/recent', (req: Request, res: Response) => {
+    const limit = parseInt(req.query.limit as string) || 20;
+
+    const albums = db.prepare(`
+        SELECT 
+            album,
+            artist,
+            MIN(id) as sample_track_id,
+            MAX(has_art) as has_art,
+            COUNT(*) as track_count,
+            MAX(added_at) as added_at,
+            year
+        FROM tracks
+        WHERE album IS NOT NULL AND album != ''
+        GROUP BY artist, album
+        ORDER BY MAX(added_at) DESC, MAX(id) DESC
+        LIMIT ?
+    `).all(limit);
+
+    res.json(albums);
+});
+
+// Get recently played albums (grouped by album)
+app.get('/api/home/albums/played', (req: Request, res: Response) => {
+    const limit = parseInt(req.query.limit as string) || 20;
+
+    const albums = db.prepare(`
+        SELECT 
+            t.album,
+            t.artist,
+            MIN(t.id) as sample_track_id,
+            MAX(t.has_art) as has_art,
+            COUNT(DISTINCT t.id) as track_count,
+            MAX(h.played_at) as last_played,
+            t.year
+        FROM listening_history h
+        JOIN tracks t ON h.track_id = t.id
+        WHERE t.album IS NOT NULL AND t.album != ''
+        GROUP BY t.artist, t.album
+        ORDER BY MAX(h.played_at) DESC
+        LIMIT ?
+    `).all(limit);
+
+    res.json(albums);
+});
+
+// ========== ALBUM COLLECTIONS ENDPOINTS ==========
+
+// Get all collections
+app.get('/api/collections', (_req: Request, res: Response) => {
+    const collections = db.prepare(`
+        SELECT c.*, 
+               (SELECT COUNT(*) FROM collection_albums WHERE collection_id = c.id) as album_count
+        FROM album_collections c 
+        ORDER BY c.updated_at DESC
+    `).all() as any[];
+
+    // Add preview albums (first 4) for each collection
+    const collectionsWithPreviews = collections.map(col => {
+        const previewAlbums = db.prepare(`
+            SELECT ca.album_name, ca.artist_name,
+                   (SELECT id FROM tracks t WHERE t.album = ca.album_name AND t.artist = ca.artist_name AND t.has_art = 1 LIMIT 1) as sample_track_id
+            FROM collection_albums ca
+            WHERE ca.collection_id = ?
+            ORDER BY ca.position
+            LIMIT 4
+        `).all(col.id);
+        return { ...col, preview_albums: previewAlbums };
+    });
+
+    res.json(collectionsWithPreviews);
+});
+
+// Get collections pinned to homepage
+app.get('/api/collections/home', (_req: Request, res: Response) => {
+    const collections = db.prepare(`
+        SELECT c.*,
+               (SELECT COUNT(*) FROM collection_albums WHERE collection_id = c.id) as album_count
+        FROM album_collections c 
+        WHERE c.pinned_to_home = 1 
+        ORDER BY c.updated_at DESC
+    `).all() as any[];
+
+    // Add preview albums (first 4) for each collection
+    const collectionsWithPreviews = collections.map(col => {
+        const previewAlbums = db.prepare(`
+            SELECT ca.album_name, ca.artist_name,
+                   (SELECT id FROM tracks t WHERE t.album = ca.album_name AND t.artist = ca.artist_name AND t.has_art = 1 LIMIT 1) as sample_track_id
+            FROM collection_albums ca
+            WHERE ca.collection_id = ?
+            ORDER BY ca.position
+            LIMIT 4
+        `).all(col.id);
+        return { ...col, preview_albums: previewAlbums };
+    });
+
+    res.json(collectionsWithPreviews);
+});
+
+// Get collection with albums
+app.get('/api/collections/:id', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const collection = db.prepare('SELECT * FROM album_collections WHERE id = ?').get(id);
+    if (!collection) return res.status(404).json({ error: 'Collection not found' });
+
+    // Get albums in collection with their tracks
+    const albums = db.prepare(`
+        SELECT ca.*, 
+               t.id as sample_track_id,
+               t.has_art
+        FROM collection_albums ca
+        LEFT JOIN (
+            SELECT album, artist, id, has_art 
+            FROM tracks 
+            WHERE has_art = 1 
+            GROUP BY album, artist
+        ) t ON t.album = ca.album_name AND t.artist = ca.artist_name
+        WHERE ca.collection_id = ?
+        ORDER BY ca.position
+    `).all(id);
+
+    res.json({ ...collection, albums });
+});
+
+// Create collection
+app.post('/api/collections', (req: Request, res: Response) => {
+    const { name, description, pinned_to_home } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name required' });
+
+    const result = db.prepare('INSERT INTO album_collections (name, description, pinned_to_home) VALUES (?, ?, ?)')
+        .run(name, description || '', pinned_to_home ? 1 : 0);
+    res.json({ id: result.lastInsertRowid, name, description });
+});
+
+// Update collection
+app.put('/api/collections/:id', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { name, description, pinned_to_home, cover_art_path } = req.body;
+
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (name !== undefined) { updates.push('name = ?'); values.push(name); }
+    if (description !== undefined) { updates.push('description = ?'); values.push(description); }
+    if (pinned_to_home !== undefined) { updates.push('pinned_to_home = ?'); values.push(pinned_to_home ? 1 : 0); }
+    if (cover_art_path !== undefined) { updates.push('cover_art_path = ?'); values.push(cover_art_path); }
+
+    if (updates.length === 0) return res.json({ success: true });
+
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(id);
+
+    db.prepare(`UPDATE album_collections SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    res.json({ success: true });
+});
+
+// Delete collection
+app.delete('/api/collections/:id', (req: Request, res: Response) => {
+    const { id } = req.params;
+    db.prepare('DELETE FROM album_collections WHERE id = ?').run(id);
+    res.json({ success: true });
+});
+
+// Add album to collection
+app.post('/api/collections/:id/albums', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { albumName, artistName } = req.body;
+    if (!albumName || !artistName) return res.status(400).json({ error: 'albumName and artistName required' });
+
+    // Get next position
+    const maxPos = db.prepare('SELECT MAX(position) as max FROM collection_albums WHERE collection_id = ?').get(id) as { max: number | null };
+    const position = (maxPos?.max || 0) + 1;
+
+    try {
+        db.prepare('INSERT INTO collection_albums (collection_id, album_name, artist_name, position) VALUES (?, ?, ?, ?)')
+            .run(id, albumName, artistName, position);
+        db.prepare('UPDATE album_collections SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+        res.json({ success: true, position });
+    } catch (e: any) {
+        if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+            res.json({ success: true, message: 'Album already in collection' });
+        } else {
+            throw e;
+        }
+    }
+});
+
+// Remove album from collection
+app.delete('/api/collections/:id/albums/:albumId', (req: Request, res: Response) => {
+    const { id, albumId } = req.params;
+    db.prepare('DELETE FROM collection_albums WHERE collection_id = ? AND id = ?').run(id, albumId);
+    db.prepare('UPDATE album_collections SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+    res.json({ success: true });
+});
+
+// ==================== LABELS API ====================
+
+// Get all labels with album count and preview albums
+app.get('/api/labels', (_req: Request, res: Response) => {
+    const labels = db.prepare(`
+        SELECT l.id, l.name, l.mbid, l.type, l.country, l.founded,
+               COUNT(DISTINCT r.id) as album_count
+        FROM labels l
+        LEFT JOIN releases r ON r.label_mbid = l.mbid
+        WHERE l.name IS NOT NULL AND l.name != '' AND l.name != '[no label]'
+        GROUP BY l.id
+        HAVING album_count > 0
+        ORDER BY album_count DESC
+    `).all() as any[];
+
+    // Add preview albums (first 4) for each label
+    const labelsWithPreviews = labels.map(label => {
+        const previewAlbums = db.prepare(`
+            SELECT DISTINCT r.title as album_name, r.artist_credit as artist_name,
+                   (SELECT id FROM tracks t WHERE t.release_mbid = r.mbid AND t.has_art = 1 LIMIT 1) as sample_track_id
+            FROM releases r
+            WHERE r.label_mbid = ?
+            ORDER BY r.release_date DESC
+            LIMIT 4
+        `).all(label.mbid);
+        return { ...label, preview_albums: previewAlbums };
+    });
+
+    res.json(labelsWithPreviews);
+});
+
+// Get single label with all albums
+app.get('/api/labels/:id', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const label = db.prepare('SELECT * FROM labels WHERE id = ?').get(id) as any;
+    if (!label) return res.status(404).json({ error: 'Label not found' });
+
+    // Get all albums from this label
+    const albums = db.prepare(`
+        SELECT DISTINCT r.id, r.title as album_name, r.artist_credit as artist_name, r.release_date,
+               (SELECT id FROM tracks t WHERE t.release_mbid = r.mbid AND t.has_art = 1 LIMIT 1) as sample_track_id
+        FROM releases r
+        WHERE r.label_mbid = ?
+        ORDER BY r.release_date DESC
+    `).all(label.mbid);
+
+    res.json({ ...label, albums });
 });
 
 // Start Server

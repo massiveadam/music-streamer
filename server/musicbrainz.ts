@@ -84,6 +84,9 @@ interface EnrichmentStatus {
     processed: number;
     currentTrack: string | null;
     errors: { track: string; error: string }[];
+    mode: 'track' | 'album'; // Track which mode we're using
+    albumsTotal?: number;
+    albumsProcessed?: number;
 }
 
 let enrichmentStatus: EnrichmentStatus = {
@@ -91,8 +94,27 @@ let enrichmentStatus: EnrichmentStatus = {
     total: 0,
     processed: 0,
     currentTrack: null,
-    errors: []
+    errors: [],
+    mode: 'track'
 };
+
+// Cache for fetched releases to avoid duplicate API calls
+const releaseCache = new Map<string, MBRelease>();
+const artistCache = new Map<string, MBArtist>();
+
+// Rate limiter for parallel workers
+let lastRequestTime = 0;
+const MIN_REQUEST_INTERVAL = 1100; // 1.1 seconds between requests
+
+async function rateLimitedRequest<T>(fn: () => Promise<T>): Promise<T> {
+    const now = Date.now();
+    const timeSinceLastRequest = now - lastRequestTime;
+    if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+        await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL - timeSinceLastRequest));
+    }
+    lastRequestTime = Date.now();
+    return fn();
+}
 
 /**
  * Search MusicBrainz for a recording by metadata
@@ -178,20 +200,35 @@ export async function getArtistDetails(mbid: string): Promise<MBArtist | null> {
 
 /**
  * Store or update an artist in the database
+ * Checks by name first to prevent duplicates, then by mbid
  */
 export function upsertArtist(artistData: MBArtist | null): number | null {
-    if (!artistData || !artistData.id) return null;
+    if (!artistData || !artistData.name) return null;
 
-    const existing = db.prepare('SELECT id FROM artists WHERE mbid = ?').get(artistData.id) as { id: number } | undefined;
-    if (existing) return existing.id;
+    // First check by name to avoid duplicates
+    const existingByName = db.prepare('SELECT id, mbid FROM artists WHERE name = ?').get(artistData.name) as { id: number; mbid: string | null } | undefined;
 
-    const insert = db.prepare(`
-    INSERT INTO artists (mbid, name, sort_name, disambiguation, type, country)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
+    if (existingByName) {
+        // Update with new data if we have more info (like mbid or description)
+        if (artistData.id && !existingByName.mbid) {
+            db.prepare(`UPDATE artists SET mbid = ?, sort_name = ?, disambiguation = ?, type = ?, country = ? WHERE id = ?`)
+                .run(artistData.id, artistData['sort-name'] || artistData.name, artistData.disambiguation || null, artistData.type || null, artistData.country || null, existingByName.id);
+        }
+        return existingByName.id;
+    }
 
-    const result = insert.run(
-        artistData.id,
+    // Also check by mbid if not found by name
+    if (artistData.id) {
+        const existingByMbid = db.prepare('SELECT id FROM artists WHERE mbid = ?').get(artistData.id) as { id: number } | undefined;
+        if (existingByMbid) return existingByMbid.id;
+    }
+
+    // Insert new artist
+    const result = db.prepare(`
+        INSERT INTO artists (mbid, name, sort_name, disambiguation, type, country)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+        artistData.id || null,
         artistData.name,
         artistData['sort-name'] || artistData.name,
         artistData.disambiguation || null,
@@ -526,7 +563,8 @@ export async function startEnrichment(): Promise<{ error?: string; message?: str
         total: tracks.length,
         processed: 0,
         currentTrack: null,
-        errors: []
+        errors: [],
+        mode: 'track'
     };
 
     console.log(`Starting MusicBrainz enrichment for ${tracks.length} tracks...`);
@@ -571,6 +609,202 @@ export function getEnrichmentStatus(): EnrichmentStatus {
     return enrichmentStatus;
 }
 
+/**
+ * Album-based enrichment - groups tracks by album and uses parallel workers
+ * This is ~10x faster than per-track enrichment
+ */
+export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ error?: string; message?: string; processed?: number; errors?: number; albumsProcessed?: number }> {
+    if (enrichmentStatus.isEnriching) {
+        return { error: 'Enrichment already in progress' };
+    }
+
+    // Get all unenriched tracks grouped by album
+    const tracks = db.prepare('SELECT * FROM tracks WHERE enriched IS NULL OR enriched = 0').all() as Track[];
+
+    if (tracks.length === 0) {
+        return { message: 'All tracks already enriched' };
+    }
+
+    // Group tracks by album+artist key
+    const albumGroups = new Map<string, Track[]>();
+    for (const track of tracks) {
+        const key = `${track.artist}|||${track.album}`;
+        if (!albumGroups.has(key)) {
+            albumGroups.set(key, []);
+        }
+        albumGroups.get(key)!.push(track);
+    }
+
+    const albums = Array.from(albumGroups.entries());
+    console.log(`Starting album-based enrichment: ${tracks.length} tracks in ${albums.length} albums with ${workerCount} workers...`);
+
+    // Clear caches for fresh run
+    releaseCache.clear();
+    artistCache.clear();
+
+    enrichmentStatus = {
+        isEnriching: true,
+        total: tracks.length,
+        processed: 0,
+        currentTrack: null,
+        errors: [],
+        mode: 'album',
+        albumsTotal: albums.length,
+        albumsProcessed: 0
+    };
+
+    // Process albums with parallel workers
+    let albumIndex = 0;
+
+    async function processNextAlbum(): Promise<void> {
+        while (albumIndex < albums.length) {
+            const currentIndex = albumIndex++;
+            const [key, albumTracks] = albums[currentIndex];
+            const [artist, album] = key.split('|||');
+
+            enrichmentStatus.currentTrack = `Album: ${artist} - ${album} (${albumTracks.length} tracks)`;
+
+            try {
+                // Use rate limiter for the initial search
+                const recording = await rateLimitedRequest(() =>
+                    searchRecording(artist, albumTracks[0].title, album)
+                );
+
+                if (!recording) {
+                    // Mark all tracks in album as enriched with no data
+                    for (const track of albumTracks) {
+                        db.prepare('UPDATE tracks SET enriched = 1 WHERE id = ?').run(track.id);
+                        enrichmentStatus.processed++;
+                    }
+                    enrichmentStatus.errors.push({
+                        track: `Album: ${artist} - ${album}`,
+                        error: 'No match found'
+                    });
+                    enrichmentStatus.albumsProcessed!++;
+                    continue;
+                }
+
+                // Get recording details
+                const details = await rateLimitedRequest(() => getRecordingDetails(recording.id));
+                if (!details) {
+                    for (const track of albumTracks) {
+                        db.prepare('UPDATE tracks SET enriched = 1 WHERE id = ?').run(track.id);
+                        enrichmentStatus.processed++;
+                    }
+                    enrichmentStatus.errors.push({
+                        track: `Album: ${artist} - ${album}`,
+                        error: 'Failed to fetch details'
+                    });
+                    enrichmentStatus.albumsProcessed!++;
+                    continue;
+                }
+
+                // Find matching release
+                let releaseFull: MBRelease | null = null;
+                if (album && details.releases && details.releases.length > 0) {
+                    const matchedRelease = details.releases.find(r =>
+                        r.title.toLowerCase() === album.toLowerCase()
+                    ) || details.releases[0];
+
+                    if (matchedRelease) {
+                        // Check cache first
+                        if (releaseCache.has(matchedRelease.id)) {
+                            releaseFull = releaseCache.get(matchedRelease.id)!;
+                        } else {
+                            releaseFull = await rateLimitedRequest(() => getReleaseDetails(matchedRelease.id));
+                            if (releaseFull) releaseCache.set(matchedRelease.id, releaseFull);
+                        }
+                    }
+                }
+
+                // Get artist details (cached)
+                let artistFull: MBArtist | null = null;
+                if (details['artist-credit'] && details['artist-credit'][0]?.artist) {
+                    const mainArtistMbid = details['artist-credit'][0].artist.id;
+                    if (artistCache.has(mainArtistMbid)) {
+                        artistFull = artistCache.get(mainArtistMbid)!;
+                    } else {
+                        artistFull = await rateLimitedRequest(() => getArtistDetails(mainArtistMbid));
+                        if (artistFull) artistCache.set(mainArtistMbid, artistFull);
+                    }
+                }
+
+                // Get Last.fm data once for the album
+                let lfmDescription: string | null = null;
+                if (album) {
+                    try {
+                        lfmDescription = await lastfm.getAlbumInfo(artist, album);
+                    } catch (e) { }
+                }
+
+                // Apply enrichment to all tracks in the album
+                const txn = db.transaction(() => {
+                    // Store release once
+                    if (releaseFull) {
+                        releaseFull.description = lfmDescription || undefined;
+                        upsertRelease(releaseFull);
+                    }
+
+                    // Store artist once
+                    if (artistFull) {
+                        upsertArtist(artistFull);
+                    }
+
+                    // Update all tracks in this album
+                    for (const track of albumTracks) {
+                        db.prepare('UPDATE tracks SET mbid = ?, enriched = 1, release_mbid = ? WHERE id = ?')
+                            .run(recording.id, releaseFull?.id || null, track.id);
+
+                        if (details.relations) storeCredits(track.id, details.relations);
+                    }
+                });
+
+                try {
+                    txn();
+                    enrichmentStatus.processed += albumTracks.length;
+                } catch (err) {
+                    console.error(`Transaction failed for album ${artist} - ${album}:`, err);
+                    enrichmentStatus.errors.push({
+                        track: `Album: ${artist} - ${album}`,
+                        error: 'Database error during write'
+                    });
+                    enrichmentStatus.processed += albumTracks.length;
+                }
+
+                // Fetch cover art (non-blocking)
+                if (releaseFull?.id) {
+                    fetchAndStoreCoverArt(releaseFull.id).catch(() => { });
+                }
+
+                enrichmentStatus.albumsProcessed!++;
+
+            } catch (err) {
+                enrichmentStatus.errors.push({
+                    track: `Album: ${artist} - ${album}`,
+                    error: (err as Error).message
+                });
+                enrichmentStatus.processed += albumTracks.length;
+                enrichmentStatus.albumsProcessed!++;
+            }
+        }
+    }
+
+    // Start parallel workers
+    const workers = Array(workerCount).fill(null).map(() => processNextAlbum());
+    await Promise.all(workers);
+
+    enrichmentStatus.isEnriching = false;
+    enrichmentStatus.currentTrack = null;
+
+    console.log(`Album enrichment complete. ${enrichmentStatus.albumsProcessed} albums (${enrichmentStatus.processed} tracks) processed.`);
+
+    return {
+        processed: enrichmentStatus.processed,
+        errors: enrichmentStatus.errors.length,
+        albumsProcessed: enrichmentStatus.albumsProcessed
+    };
+}
+
 export default {
     searchRecording,
     getRecordingDetails,
@@ -578,6 +812,7 @@ export default {
     getArtistDetails,
     enrichTrack,
     startEnrichment,
+    startAlbumEnrichment,
     getEnrichmentStatus,
     upsertArtist
 };

@@ -136,7 +136,7 @@ export interface EnrichStatus {
 
 export type RepeatMode = 'off' | 'all' | 'one';
 export type ViewTab = 'home' | 'tracks' | 'albums' | 'artists' | 'playlists' | 'search' | 'settings';
-export type LibraryView = 'tracks' | 'albums' | 'artists';
+export type LibraryView = 'tracks' | 'albums' | 'artists' | 'labels';
 export type AlbumSort = 'artist' | 'title' | 'year' | 'recent';
 export type Theme = 'dark' | 'light';
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback, ChangeEvent, MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import axios, { AxiosResponse } from 'axios';
-import { Play, Pause, SkipForward, SkipBack, Volume2, Sliders, Disc, Search, Settings, X, Clock, Calendar, Hash, PlusCircle, RefreshCcw, Home, Library, Sparkles, ListMusic, Shuffle, Repeat, Repeat1 } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Volume2, Sliders, Disc, Search, Settings, X, Clock, Calendar, Hash, PlusCircle, RefreshCcw, Home, Library, Sparkles, ListMusic, Shuffle, Repeat, Repeat1, LayoutGrid, List, Plus, RefreshCw } from 'lucide-react';
 import { audioEngine } from './audio/AudioEngine';
 import { NowPlaying } from './components/NowPlaying';
 import type { Track, Artist, Credit, Playlist, RepeatMode, ViewTab, AlbumSort, Theme } from './types';
@@ -47,8 +47,8 @@ interface ArtistDetails {
 }
 
 type DeckId = 'A' | 'B';
-type LibraryView = 'grid' | 'list' | 'artists';
-type MainTab = 'home' | 'library' | 'settings';
+type LibraryView = 'grid' | 'list' | 'artists' | 'labels';
+type MainTab = 'home' | 'library' | 'playlists' | 'settings';
 type ActiveTab = 'tracks' | 'credits' | 'discography';
 
 function App() {
@@ -65,6 +65,7 @@ function App() {
   const [recentlyAdded, setRecentlyAdded] = useState<Track[]>([]);
   const [recentlyPlayed, setRecentlyPlayed] = useState<Track[]>([]);
   const [featuredPlaylists, setFeaturedPlaylists] = useState<Playlist[]>([]);
+  const [pinnedCollections, setPinnedCollections] = useState<any[]>([]);
 
   // Playback modes
   const [shuffleMode, setShuffleMode] = useState<boolean>(false);
@@ -99,7 +100,7 @@ function App() {
   const fetchTracks = async () => {
     setIsLoading(true);
     try {
-      const res = await axios.get(`${SERVER_URL}/api/tracks?limit=10000`);
+      const res = await axios.get(`${SERVER_URL}/api/tracks?limit=100000`);
       setTracks(res.data.tracks || res.data);
     } catch (err) {
       console.error("Error fetching tracks:", err);
@@ -107,6 +108,30 @@ function App() {
       setIsLoading(false);
     }
   };
+
+  // Labels state
+  const [allLabels, setAllLabels] = useState<any[]>([]);
+  const [selectedLabel, setSelectedLabel] = useState<any | null>(null);
+
+  // Album Collections state
+  const [allCollections, setAllCollections] = useState<any[]>([]);
+  const [selectedCollection, setSelectedCollection] = useState<any | null>(null);
+  const [playlistsViewMode, setPlaylistsViewMode] = useState<'playlists' | 'collections'>('playlists');
+  const [addToCollectionAlbum, setAddToCollectionAlbum] = useState<{ name: string; artist: string } | null>(null);
+
+  // Playlists state  
+  const [allPlaylists, setAllPlaylists] = useState<Playlist[]>([]);
+  const [homePlaylists, setHomePlaylists] = useState<Playlist[]>([]);
+  const [selectedPlaylist, setSelectedPlaylist] = useState<any | null>(null);
+  const [showPlaylistModal, setShowPlaylistModal] = useState(false);
+  const [editingPlaylist, setEditingPlaylist] = useState<Playlist | null>(null);
+  const [addToPlaylistTrack, setAddToPlaylistTrack] = useState<Track | null>(null);
+
+  // Background task status
+  const [backgroundStatus, setBackgroundStatus] = useState<{
+    enrichment?: { running: boolean; albumsProcessed: number; albumsTotal: number; currentTrack?: string };
+    scanning?: { running: boolean; filesScanned: number };
+  }>({});
 
   // Fetch Artists
   const [artists, setArtists] = useState([]);
@@ -124,33 +149,69 @@ function App() {
     if (view === 'artists') {
       fetchArtists();
     }
+    if (view === 'labels') {
+      axios.get(`${SERVER_URL}/api/labels`)
+        .then(res => setAllLabels(res.data))
+        .catch(err => console.error('Error fetching labels:', err));
+    }
   }, [view]);
 
   // Fetch home page data
   useEffect(() => {
     if (mainTab === 'home') {
       // Fetch recently added
-      axios.get(`${SERVER_URL}/api/tracks/recent?limit=10`)
+      axios.get(`${SERVER_URL}/api/tracks/recent?limit=60`)
         .then(res => setRecentlyAdded(res.data))
         .catch(err => console.error('Error fetching recent:', err));
       // Fetch recently played
-      axios.get(`${SERVER_URL}/api/history/recent?limit=10`)
+      axios.get(`${SERVER_URL}/api/history/recent?limit=60`)
         .then(res => setRecentlyPlayed(res.data))
         .catch(err => console.error('Error fetching history:', err));
-      // Fetch featured playlists
-      axios.get(`${SERVER_URL}/api/playlists/featured`)
-        .then(res => setFeaturedPlaylists(res.data))
-        .catch(err => console.error('Error fetching playlists:', err));
+      // Fetch pinned collections
+      axios.get(`${SERVER_URL}/api/collections/home`)
+        .then(res => setPinnedCollections(res.data))
+        .catch(err => console.error('Error fetching pinned collections:', err));
       // Also fetch artists count
       fetchArtists();
     }
+    // Fetch playlists and collections for home and playlists tabs
+    if (mainTab === 'home' || mainTab === 'playlists') {
+      axios.get(`${SERVER_URL}/api/playlists`)
+        .then(res => setAllPlaylists(res.data))
+        .catch(err => console.error('Error fetching all playlists:', err));
+      axios.get(`${SERVER_URL}/api/collections`)
+        .then(res => setAllCollections(res.data))
+        .catch(err => console.error('Error fetching collections:', err));
+    }
   }, [mainTab]);
+
+  // Background status polling
+  useEffect(() => {
+    const pollStatus = () => {
+      axios.get(`${SERVER_URL}/api/enrich/status`)
+        .then(res => setBackgroundStatus(prev => ({ ...prev, enrichment: res.data })))
+        .catch(() => { });
+    };
+    pollStatus();
+    const interval = setInterval(pollStatus, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Theme persistence
   useEffect(() => {
     localStorage.setItem('theme', theme);
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  // Helper to refresh playlists
+  const refreshPlaylists = async () => {
+    const [all, home] = await Promise.all([
+      axios.get(`${SERVER_URL}/api/playlists`),
+      axios.get(`${SERVER_URL}/api/playlists/home`)
+    ]);
+    setAllPlaylists(all.data);
+    setHomePlaylists(home.data);
+  };
 
   // Album sorting
   const [albumSort, setAlbumSort] = useState('artist'); // 'artist' | 'title' | 'year' | 'recent'
@@ -626,6 +687,27 @@ function App() {
           <Library size={22} />
         </button>
         <button
+          onClick={() => setMainTab('playlists')}
+          className={`p-3 rounded-xl transition-all border ${mainTab === 'playlists' ? 'bg-white/10 border-white/20 text-white shadow-[0_0_15px_rgba(255,255,255,0.1)]' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
+          title="Playlists"
+        >
+          <ListMusic size={22} />
+        </button>
+
+        {/* Status Indicator */}
+        <div className="mt-auto mb-4 flex flex-col gap-4">
+          {(backgroundStatus.enrichment?.running || backgroundStatus.scanning?.running) && (
+            <div className="w-10 h-10 rounded-full bg-app-surface border border-app-accent/50 flex items-center justify-center animate-pulse group relative cursor-help">
+              <RefreshCw size={20} className="text-app-accent animate-spin" />
+              <div className="absolute left-14 bg-black/90 text-xs px-2 py-1 rounded whitespace-nowrap hidden group-hover:block z-50 border border-white/10">
+                {backgroundStatus.enrichment?.running
+                  ? `Enriching... (${Math.round((backgroundStatus.enrichment.albumsProcessed / backgroundStatus.enrichment.albumsTotal) * 100)}%)`
+                  : "Scanning Library..."}
+              </div>
+            </div>
+          )}
+        </div>
+        <button
           onClick={() => setMainTab('settings')}
           className={`p-3 rounded-xl transition-all border ${mainTab === 'settings' ? 'bg-white/10 border-white/20 text-white shadow-[0_0_15px_rgba(255,255,255,0.1)]' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
           title="Settings"
@@ -640,151 +722,221 @@ function App() {
         {/* ===== HOME PAGE ===== */}
         {mainTab === 'home' && (
           <div className="flex-1 overflow-y-auto p-8 bg-app-bg">
-            <div className="max-w-4xl mx-auto">
-              <h1 className="text-4xl font-serif font-bold text-app-text mb-8">
-                Your Library
-              </h1>
+            <div className="max-w-7xl mx-auto">
+              <header className="mb-12">
+                <h1 className="text-4xl font-serif font-bold text-app-text">
+                  Welcome Back
+                </h1>
+              </header>
 
-              {/* Quick Stats */}
-              <div className="grid grid-cols-3 gap-6 mb-12">
-                <div className="bg-app-surface rounded-xl p-6 text-center">
-                  <div className="text-3xl font-bold text-app-accent mb-2">{tracks.length}</div>
-                  <div className="text-sm text-app-text-muted">Tracks</div>
-                </div>
-                <div className="bg-app-surface rounded-xl p-6 text-center">
-                  <div className="text-3xl font-bold text-app-accent mb-2">{albums.length}</div>
-                  <div className="text-sm text-app-text-muted">Albums</div>
-                </div>
-                <div className="bg-app-surface rounded-xl p-6 text-center">
-                  <div className="text-3xl font-bold text-app-accent mb-2">{artists.length}</div>
-                  <div className="text-sm text-app-text-muted">Artists</div>
-                </div>
-              </div>
-
-              {/* Mood Discovery */}
-              <h2 className="text-xl font-bold text-app-text mb-4">Mood Discovery</h2>
-              <div className="flex gap-4 mb-12">
-                {['Energy', 'Chill', 'Focus', 'Party', 'Dark'].map(m => (
-                  <button
-                    key={m}
-                    onClick={() => {
-                      handleMoodSelect(m);
-                      setMainTab('library');
-                    }}
-                    className="flex-1 bg-app-surface hover:bg-app-accent/20 border border-app-surface hover:border-app-accent rounded-xl p-6 text-center transition-all"
-                  >
-                    <Sparkles size={24} className="mx-auto mb-2 text-app-accent" />
-                    <div className="font-medium text-app-text">{m}</div>
-                  </button>
-                ))}
-              </div>
-
-              {/* Quick Actions */}
-              <h2 className="text-xl font-bold text-app-text mb-4">Quick Actions</h2>
-              <div className="flex gap-4">
-                <button
-                  onClick={() => setMainTab('library')}
-                  className="flex-1 bg-app-surface hover:bg-app-surface/80 rounded-xl p-6 flex items-center gap-4 transition-colors"
-                >
-                  <ListMusic size={24} className="text-app-accent" />
-                  <div className="text-left">
-                    <div className="font-medium text-app-text">Browse Library</div>
-                    <div className="text-sm text-app-text-muted">Explore your collection</div>
-                  </div>
-                </button>
-                <button
-                  onClick={() => setMainTab('settings')}
-                  className="flex-1 bg-app-surface hover:bg-app-surface/80 rounded-xl p-6 flex items-center gap-4 transition-colors"
-                >
-                  <Settings size={24} className="text-app-accent" />
-                  <div className="text-left">
-                    <div className="font-medium text-app-text">Settings</div>
-                    <div className="text-sm text-app-text-muted">Manage your library</div>
-                  </div>
-                </button>
-              </div>
-
-              {/* Recently Added */}
-              {recentlyAdded.length > 0 && (
-                <div className="mt-12">
-                  <h2 className="text-xl font-bold text-app-text mb-4">Recently Added</h2>
-                  <div className="flex gap-4 overflow-x-auto pb-4 no-scrollbar">
-                    {recentlyAdded.map(track => (
-                      <div
-                        key={track.id}
-                        className="shrink-0 w-40 cursor-pointer group"
-                        onClick={() => {
-                          if (Array.isArray(tracks)) {
-                            const idx = tracks.findIndex(t => t.id === track.id);
-                            if (idx !== -1) playTrack(idx, 'cut');
-                          }
-                        }}
-                      >
-                        <div className="aspect-square bg-app-surface rounded-lg mb-2 overflow-hidden">
-                          {track.has_art ? (
-                            <img src={`${SERVER_URL}/api/art/${track.id}`} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center"><Disc className="text-app-text-muted" /></div>
-                          )}
+              {/* 1. Recently Played Albums (Largest) */}
+              {recentlyPlayed.length > 0 && (
+                <div className="mb-16">
+                  <h2 className="text-2xl font-bold text-app-text mb-6 flex items-center gap-2">
+                    <Disc size={24} className="text-app-accent" />
+                    Jump Back In
+                  </h2>
+                  <div className="flex gap-6 overflow-x-auto pb-4 no-scrollbar">
+                    {/* Filter unique albums from recentlyPlayed */}
+                    {recentlyPlayed
+                      .filter((t, index, self) =>
+                        t.album && index === self.findIndex(t2 => t2.album === t.album && t2.artist === t.artist)
+                      )
+                      .slice(0, 10)
+                      .map((track, i) => (
+                        <div
+                          key={`${track.album}-${i}`}
+                          className="shrink-0 w-64 cursor-pointer group"
+                          onClick={() => {
+                            const albumTracks = tracks.filter(t => t.album === track.album && t.artist === track.artist);
+                            if (albumTracks.length > 0) {
+                              const idx = tracks.findIndex(t => t.id === albumTracks[0].id);
+                              if (idx !== -1) playTrack(idx, 'cut');
+                            } else {
+                              // Fallback to playing the track itself
+                              const idx = tracks.findIndex(t => t.id === track.id);
+                              if (idx !== -1) playTrack(idx, 'cut');
+                            }
+                          }}
+                        >
+                          <div className="aspect-square bg-app-surface rounded-xl mb-4 overflow-hidden shadow-2xl group-hover:scale-[1.02] transition-transform duration-300 ring-1 ring-white/10 group-hover:ring-app-accent/50">
+                            {track.has_art ? (
+                              <img src={`${SERVER_URL}/api/art/${track.id}`} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center bg-white/5"><Disc size={64} className="text-app-text-muted/50" /></div>
+                            )}
+                          </div>
+                          <div className="text-lg font-bold text-app-text truncate">{track.album}</div>
+                          <div className="text-app-text-muted truncate">{track.artist}</div>
                         </div>
-                        <div className="text-sm font-medium text-app-text truncate">{track.title}</div>
-                        <div className="text-xs text-app-text-muted truncate">{track.artist}</div>
-                      </div>
-                    ))}
+                      ))}
                   </div>
                 </div>
               )}
 
-              {/* Recently Played */}
+              {/* 2. Recently Added Albums (Slightly Smaller) */}
+              {recentlyAdded.length > 0 && (
+                <div className="mb-16">
+                  <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
+                    <Clock size={20} className="text-app-accent" />
+                    Fresh Arrivals
+                  </h2>
+                  <div className="flex gap-5 overflow-x-auto pb-4 no-scrollbar">
+                    {recentlyAdded
+                      .filter((t, index, self) =>
+                        t.album && index === self.findIndex(t2 => t2.album === t.album && t2.artist === t.artist)
+                      )
+                      .slice(0, 20)
+                      .map(track => (
+                        <div
+                          key={track.id}
+                          className="shrink-0 w-44 cursor-pointer group"
+                          onClick={() => {
+                            // Play album start
+                            const albumTracks = tracks.filter(t => t.album === track.album && t.artist === track.artist);
+                            if (albumTracks.length > 0) {
+                              const idx = tracks.findIndex(t => t.id === albumTracks[0].id);
+                              if (idx !== -1) playTrack(idx, 'cut');
+                            }
+                          }}
+                        >
+                          <div className="aspect-square bg-app-surface rounded-lg mb-3 overflow-hidden shadow-lg group-hover:shadow-xl transition-all">
+                            {track.has_art ? (
+                              <img src={`${SERVER_URL}/api/art/${track.id}`} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center bg-white/5"><Disc className="text-app-text-muted" /></div>
+                            )}
+                          </div>
+                          <div className="font-medium text-app-text truncate">{track.album}</div>
+                          <div className="text-xs text-app-text-muted truncate">{track.artist}</div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 3. Pinned Collections / Suggested */}
+              <div className="mb-16">
+                <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
+                  <Sparkles size={20} className="text-app-accent" />
+                  Collections
+                </h2>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                  {pinnedCollections.map(col => (
+                    <div
+                      key={col.id}
+                      className="bg-app-surface hover:bg-app-surface/80 rounded-xl p-4 cursor-pointer transition-colors group"
+                      onClick={() => setSelectedCollection(col)}
+                    >
+                      <div className="aspect-square bg-gradient-to-br from-teal-500/30 to-blue-500/30 rounded-lg mb-3 overflow-hidden shadow-lg group-hover:scale-[1.02] transition-transform duration-300">
+                        <div className="grid grid-cols-2 grid-rows-2 gap-0.5 w-full h-full p-0.5">
+                          {[0, 1, 2, 3].map(i => {
+                            const previewAlbum = col.preview_albums?.[i];
+                            return (
+                              <div key={i} className="bg-app-bg/50 rounded-sm overflow-hidden aspect-square">
+                                {previewAlbum?.sample_track_id ? (
+                                  <img
+                                    src={`${SERVER_URL}/api/art/${previewAlbum.sample_track_id}`}
+                                    alt=""
+                                    className="w-full h-full object-cover"
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center">
+                                    <Disc size={20} className="text-app-text-muted/50" />
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="text-base font-bold text-app-text truncate">{col.name}</div>
+                      <div className="text-sm text-app-text-muted truncate">{col.description || 'Collection'}</div>
+                    </div>
+                  ))}
+
+                  {/* Add Collection Button (Shortcut) */}
+                  <div
+                    className="bg-app-surface/30 hover:bg-app-surface border-2 border-dashed border-app-surface hover:border-app-text-muted rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition-all group min-h-[200px]"
+                    onClick={() => {
+                      setMainTab('playlists');
+                      setPlaylistsViewMode('collections');
+                      setAddToCollectionAlbum(null);
+                    }}
+                  >
+                    <div className="w-12 h-12 rounded-full bg-app-surface group-hover:bg-app-accent/20 flex items-center justify-center mb-3 transition-colors">
+                      <Plus size={24} className="text-app-text-muted group-hover:text-app-accent" />
+                    </div>
+                    <span className="font-bold text-app-text">New Collection</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Listening History (Track List) */}
               {recentlyPlayed.length > 0 && (
-                <div className="mt-8">
-                  <h2 className="text-xl font-bold text-app-text mb-4">Recently Played</h2>
-                  <div className="flex gap-4 overflow-x-auto pb-4 no-scrollbar">
-                    {recentlyPlayed.map((track, i) => (
+                <div className="mb-16">
+                  <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
+                    <ListMusic size={20} className="text-app-accent" />
+                    Listening History
+                  </h2>
+                  <div className="bg-app-surface/50 rounded-2xl p-4">
+                    {recentlyPlayed.slice(0, 10).map((track, i) => (
                       <div
                         key={`${track.id}-${i}`}
-                        className="shrink-0 w-40 cursor-pointer group"
+                        className="flex items-center gap-4 p-3 hover:bg-white/5 rounded-xl cursor-pointer group transition-colors border-b border-white/5 last:border-0"
                         onClick={() => {
                           if (!Array.isArray(tracks)) return;
                           const idx = tracks.findIndex(t => t.id === track.id);
-                          if (idx !== -1) {
-                            playTrack(idx, 'cut');
-                            setShowNowPlaying(true);
-                          }
+                          if (idx !== -1) playTrack(idx, 'cut');
                         }}
                       >
-                        <div className="aspect-square bg-app-surface rounded-lg mb-2 overflow-hidden">
+                        <div className="w-10 h-10 rounded-lg bg-app-surface overflow-hidden shrink-0">
                           {track.has_art ? (
-                            <img src={`${SERVER_URL}/api/art/${track.id}`} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                            <img src={`${SERVER_URL}/api/art/${track.id}`} alt="" className="w-full h-full object-cover" />
                           ) : (
-                            <div className="w-full h-full flex items-center justify-center"><Disc className="text-app-text-muted" /></div>
+                            <div className="w-full h-full flex items-center justify-center"><Disc size={16} className="text-app-text-muted" /></div>
                           )}
                         </div>
-                        <div className="text-sm font-medium text-app-text truncate">{track.title}</div>
-                        <div className="text-xs text-app-text-muted truncate">{track.artist}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-app-text truncate group-hover:text-app-accent transition-colors">{track.title}</div>
+                          <div className="text-sm text-app-text-muted truncate">{track.artist} • {track.album}</div>
+                        </div>
+                        <div className="text-xs text-app-text-muted font-mono px-4">
+                          {track.duration ? new Date(track.duration * 1000).toISOString().substr(14, 5) : '--:--'}
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Featured Playlists */}
-              {featuredPlaylists.length > 0 && (
-                <div className="mt-8">
-                  <h2 className="text-xl font-bold text-app-text mb-4">Featured Playlists</h2>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                    {featuredPlaylists.map(pl => (
-                      <div
-                        key={pl.id}
-                        className="bg-app-surface hover:bg-app-surface/80 rounded-xl p-6 cursor-pointer transition-colors"
-                      >
-                        <div className="text-lg font-bold text-app-text mb-1">{pl.name}</div>
-                        <div className="text-sm text-app-text-muted">{pl.description}</div>
-                      </div>
-                    ))}
+              {/* 5. Music Database Facts (Stats) */}
+              <div className="mb-12 border-t border-white/10 pt-8">
+                <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
+                  <Hash size={20} className="text-app-accent" />
+                  Database Stats
+                </h2>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                  <div className="bg-app-surface/40 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-white mb-1">{tracks.length.toLocaleString()}</div>
+                    <div className="text-sm text-app-text-muted uppercase tracking-wider">Tracks</div>
+                  </div>
+                  <div className="bg-app-surface/40 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-white mb-1">{albums.length.toLocaleString()}</div>
+                    <div className="text-sm text-app-text-muted uppercase tracking-wider">Albums</div>
+                  </div>
+                  <div className="bg-app-surface/40 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-white mb-1">{artists.length.toLocaleString()}</div>
+                    <div className="text-sm text-app-text-muted uppercase tracking-wider">Artists</div>
+                  </div>
+                  <div className="bg-app-surface/40 rounded-xl p-6">
+                    <div className="text-3xl font-bold text-white mb-1">
+                      {Math.floor(tracks.reduce((acc, t) => acc + (t.duration || 0), 0) / 3600).toLocaleString()}
+                    </div>
+                    <div className="text-sm text-app-text-muted uppercase tracking-wider">Hours of Music</div>
                   </div>
                 </div>
-              )}
+              </div>
             </div>
           </div>
         )}
@@ -893,6 +1045,166 @@ function App() {
           </div>
         )}
 
+
+        {/* ===== PLAYLISTS PAGE ===== */}
+        {mainTab === 'playlists' && (
+          <div className="flex-1 overflow-y-auto p-8 bg-app-bg">
+            <div className="max-w-7xl mx-auto">
+              {/* Header */}
+              <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center gap-4">
+                  <button
+                    onClick={() => setPlaylistsViewMode('playlists')}
+                    className={`text-2xl font-bold transition-colors ${playlistsViewMode === 'playlists' ? 'text-app-text' : 'text-app-text-muted hover:text-white'}`}
+                  >
+                    Playlists
+                  </button>
+                  <span className="text-app-text-muted">|</span>
+                  <button
+                    onClick={() => setPlaylistsViewMode('collections')}
+                    className={`text-2xl font-bold transition-colors ${playlistsViewMode === 'collections' ? 'text-app-text' : 'text-app-text-muted hover:text-white'}`}
+                  >
+                    Collections
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => {
+                    if (playlistsViewMode === 'playlists') {
+                      setEditingPlaylist({ id: 0, name: '', description: '' } as Playlist);
+                      setShowPlaylistModal(true);
+                    } else {
+                      setAddToCollectionAlbum(null); // Just opens modal to create
+                    }
+                  }}
+                  className="px-4 py-2 bg-app-accent hover:bg-app-accent/80 rounded-lg text-white font-bold transition-colors flex items-center gap-2"
+                >
+                  <Plus size={20} />
+                  {playlistsViewMode === 'playlists' ? 'New Playlist' : 'New Collection'}
+                </button>
+
+              </div>
+
+              {/* Playlists Grid */}
+              {playlistsViewMode === 'playlists' && (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                    {/* Add to Playlist Card */}
+                    <div
+                      className="bg-app-surface/50 hover:bg-app-surface border-2 border-dashed border-app-surface hover:border-app-text-muted rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all group min-h-[200px]"
+                      onClick={() => {
+                        setEditingPlaylist({ id: 0, name: '', description: '' } as Playlist);
+                        setShowPlaylistModal(true);
+                      }}
+                    >
+                      <div className="w-16 h-16 rounded-full bg-app-surface group-hover:bg-app-accent/20 flex items-center justify-center mb-4 transition-colors">
+                        <Plus size={32} className="text-app-text-muted group-hover:text-app-accent" />
+                      </div>
+                      <span className="font-bold text-app-text">Create Playlist</span>
+                    </div>
+
+                    {allPlaylists.map(playlist => (
+                      <div
+                        key={playlist.id}
+                        className="bg-app-surface hover:bg-app-surface/80 rounded-xl p-4 cursor-pointer transition-colors group"
+                        onClick={() => setSelectedPlaylist(playlist)}
+                      >
+                        <div className="aspect-square bg-gradient-to-br from-indigo-500/30 to-purple-500/30 rounded-lg mb-3 flex items-center justify-center shadow-lg group-hover:shadow-xl transition-all">
+                          <ListMusic size={48} className="text-white/50" />
+                        </div>
+                        <div className="text-lg font-bold text-app-text truncate">{playlist.name}</div>
+                        <div className="text-sm text-app-text-muted truncate">
+                          {playlist.description || 'No description'}
+                        </div>
+                        <div className="mt-2 text-xs text-app-text-muted">
+                          Playlist
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {allPlaylists.length === 0 && (
+                    <div className="text-center py-16">
+                      <ListMusic size={64} className="mx-auto mb-4 text-app-text-muted opacity-50" />
+                      <h2 className="text-xl font-bold text-app-text mb-2">No playlists yet</h2>
+                      <p className="text-app-text-muted">Create your first playlist to get started!</p>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Collections Grid */}
+              {playlistsViewMode === 'collections' && (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                    {/* Create Collection Card */}
+                    <div
+                      className="bg-app-surface/50 hover:bg-app-surface border-2 border-dashed border-app-surface hover:border-app-text-muted rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all group min-h-[200px]"
+                      onClick={() => setAddToCollectionAlbum(null)}
+                    >
+                      <div className="w-16 h-16 rounded-full bg-app-surface group-hover:bg-app-accent/20 flex items-center justify-center mb-4 transition-colors">
+                        <Plus size={32} className="text-app-text-muted group-hover:text-app-accent" />
+                      </div>
+                      <span className="font-bold text-app-text">Create Collection</span>
+                    </div>
+
+                    {allCollections.map(col => (
+                      <div
+                        key={col.id}
+                        className="bg-app-surface hover:bg-app-surface/80 rounded-xl p-4 cursor-pointer transition-colors group"
+                        onClick={() => setSelectedCollection(col)}
+                      >
+                        <div className="aspect-square bg-gradient-to-br from-teal-500/30 to-blue-500/30 rounded-lg mb-3 overflow-hidden shadow-lg">
+                          <div className="grid grid-cols-2 grid-rows-2 gap-0.5 w-full h-full p-0.5">
+                            {/* Show up to 4 album covers */}
+                            {[0, 1, 2, 3].map(i => {
+                              const previewAlbum = col.preview_albums?.[i];
+                              return (
+                                <div key={i} className="bg-app-bg/50 rounded-sm overflow-hidden aspect-square">
+                                  {previewAlbum?.sample_track_id ? (
+                                    <img
+                                      src={`${SERVER_URL}/api/art/${previewAlbum.sample_track_id}`}
+                                      alt=""
+                                      className="w-full h-full object-cover"
+                                    />
+                                  ) : (
+                                    <div className="w-full h-full flex items-center justify-center">
+                                      <Disc size={20} className="text-app-text-muted/50" />
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <div className="text-base font-bold text-app-text truncate">{col.name}</div>
+                        <div className="text-sm text-app-text-muted truncate">{col.description || 'Collection'}</div>
+                        <div className="mt-1 text-xs text-app-text-muted">
+                          {col.album_count || 0} albums
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {allCollections.length === 0 && (
+                    <div className="text-center py-16">
+                      <Disc size={64} className="mx-auto mb-4 text-app-text-muted opacity-50" />
+                      <h2 className="text-xl font-bold text-app-text mb-2">No collections yet</h2>
+                      <p className="text-app-text-muted">Group albums into collections like "Jazz Classics" or "Gym Rotation"</p>
+                      <button
+                        onClick={() => setAddToCollectionAlbum(null)}
+                        className="mt-4 px-6 py-2 bg-app-accent hover:bg-app-accent/80 rounded-full text-white font-medium"
+                      >
+                        Create Collection
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ===== LIBRARY PAGE ===== */}
         {mainTab === 'library' && (
           <>
@@ -922,725 +1234,721 @@ function App() {
                 )}
               </div>
 
-              {/* Curation / Moods */}
-              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar mask-linear-fade">
-                {['Energy', 'Chill', 'Focus', 'Party', 'Dark'].map(m => (
-                  <button
-                    key={m}
-                    onClick={() => handleMoodSelect(moodFilter === m ? '' : m)}
-                    className={`px-3 py-1 text-xs rounded-full border transition-all whitespace-nowrap ${moodFilter === m
-                      ? 'bg-white text-black border-white font-medium'
-                      : 'border-white/20 hover:border-white text-app-text-muted hover:text-white bg-transparent'
-                      }`}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex gap-4 shrink-0">
-                <button
-                  onClick={() => setShowRescanModal(true)}
-                  className="p-2 hover:bg-app-surface rounded-full text-app-text-muted hover:text-white"
-                  title="Rescan / Settings"
+              {/* Sort Controls - Right Justified */}
+              <div className="ml-auto shrink-0">
+                <select
+                  value={albumSort}
+                  onChange={(e) => setAlbumSort(e.target.value)}
+                  className="bg-app-surface border border-white/10 rounded-lg px-3 py-1.5 text-sm text-app-text outline-none focus:border-app-accent cursor-pointer"
                 >
-                  <Settings size={20} />
-                </button>
+                  <option value="artist">Sort by Artist</option>
+                  <option value="title">Sort by Title</option>
+                  <option value="year">Sort by Year</option>
+                  <option value="recent">Recently Added</option>
+                </select>
               </div>
             </div>
 
 
             {/* Rescan Confirmation Modal */}
-            {showRescanModal && (
-              <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-200">
-                <div className="bg-app-bg border border-app-surface rounded-lg p-6 max-w-md mx-4 shadow-2xl animate-in zoom-in-95 duration-200">
-                  <h2 className="text-xl font-bold text-app-text mb-3">Clear & Rescan Library</h2>
-                  <p className="text-app-text-muted mb-4 text-sm">This will delete all existing tracks and credits, then scan the specified directory.</p>
+            {
+              showRescanModal && (
+                <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-200">
+                  <div className="bg-app-bg border border-app-surface rounded-lg p-6 max-w-md mx-4 shadow-2xl animate-in zoom-in-95 duration-200">
+                    <h2 className="text-xl font-bold text-app-text mb-3">Clear & Rescan Library</h2>
+                    <p className="text-app-text-muted mb-4 text-sm">This will delete all existing tracks and credits, then scan the specified directory.</p>
 
-                  {/* Path Input */}
-                  <div className="mb-4">
-                    <label className="block text-sm font-medium text-app-text mb-2">Music Directory Path</label>
-                    <input
-                      type="text"
-                      defaultValue="/home/adam/Music"
-                      id="scanPathInput"
-                      placeholder="/path/to/music"
-                      className="w-full bg-app-surface border border-app-surface focus:border-app-accent rounded-lg px-3 py-2 text-app-text text-sm outline-none transition-colors"
-                    />
-                  </div>
+                    {/* Path Input */}
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-app-text mb-2">Music Directory Path</label>
+                      <input
+                        type="text"
+                        defaultValue="/home/adam/Music"
+                        id="scanPathInput"
+                        placeholder="/path/to/music"
+                        className="w-full bg-app-surface border border-app-surface focus:border-app-accent rounded-lg px-3 py-2 text-app-text text-sm outline-none transition-colors"
+                      />
+                    </div>
 
-                  {/* Limit Input */}
-                  <div className="mb-6">
-                    <label className="block text-sm font-medium text-app-text mb-2">Scan Limit (0 = unlimited)</label>
-                    <input
-                      type="number"
-                      defaultValue="500"
-                      id="scanLimitInput"
-                      placeholder="500"
-                      min="0"
-                      className="w-full bg-app-surface border border-app-surface focus:border-app-accent rounded-lg px-3 py-2 text-app-text text-sm outline-none transition-colors"
-                    />
-                  </div>
+                    {/* Limit Input */}
+                    <div className="mb-6">
+                      <label className="block text-sm font-medium text-app-text mb-2">Scan Limit (0 = unlimited)</label>
+                      <input
+                        type="number"
+                        defaultValue="500"
+                        id="scanLimitInput"
+                        placeholder="500"
+                        min="0"
+                        className="w-full bg-app-surface border border-app-surface focus:border-app-accent rounded-lg px-3 py-2 text-app-text text-sm outline-none transition-colors"
+                      />
+                    </div>
 
-                  <div className="flex gap-3 justify-end">
-                    <button
-                      onClick={() => setShowRescanModal(false)}
-                      className="px-4 py-2 rounded-lg bg-app-surface text-app-text hover:bg-app-surface/80 transition-colors"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={async () => {
-                        const pathElement = document.getElementById('scanPathInput') as HTMLInputElement;
-                        const limitElement = document.getElementById('scanLimitInput') as HTMLInputElement;
-                        const path = pathElement?.value;
-                        const limit = parseInt(limitElement?.value) || 0;
+                    <div className="flex gap-3 justify-end">
+                      <button
+                        onClick={() => setShowRescanModal(false)}
+                        className="px-4 py-2 rounded-lg bg-app-surface text-app-text hover:bg-app-surface/80 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={async () => {
+                          const pathElement = document.getElementById('scanPathInput') as HTMLInputElement;
+                          const limitElement = document.getElementById('scanLimitInput') as HTMLInputElement;
+                          const path = pathElement?.value;
+                          const limit = parseInt(limitElement?.value) || 0;
 
-                        setShowRescanModal(false);
+                          setShowRescanModal(false);
 
-                        if (path) {
-                          try {
-                            await axios.post(`${SERVER_URL}/api/clear`);
-                            await axios.post(`${SERVER_URL}/api/scan`, { path, limit });
-                            setShowScanOverlay(true);
-                          } catch (e) {
-                            alert("Scan failed to start: " + (e as Error).message);
+                          if (path) {
+                            try {
+                              await axios.post(`${SERVER_URL}/api/clear`);
+                              await axios.post(`${SERVER_URL}/api/scan`, { path, limit });
+                              setShowScanOverlay(true);
+                            } catch (e) {
+                              alert("Scan failed to start: " + (e as Error).message);
+                            }
                           }
-                        }
-                      }}
-                      className="px-4 py-2 rounded-lg bg-transparent border border-white/20 text-white hover:bg-white/10 transition-colors"
-                    >
-                      Clear & Rescan
-                    </button>
+                        }}
+                        className="px-4 py-2 rounded-lg bg-transparent border border-white/20 text-white hover:bg-white/10 transition-colors"
+                      >
+                        Clear & Rescan
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )
+            }
 
             {/* Artist Detail Overlay */}
-            {selectedArtist && artistDetails && (
-              <div className="fixed inset-0 z-[100] bg-app-bg text-app-text overflow-y-auto animate-in fade-in duration-200 custom-scrollbar">
-                {/* Header Bar */}
-                <div className="sticky top-0 z-50 bg-app-bg border-b border-app-surface px-6 py-4 flex items-center justify-between">
-                  <button
-                    onClick={() => setSelectedArtist(null)}
-                    className="p-2 hover:bg-app-surface rounded-full transition-colors"
-                  >
-                    <X size={20} className="text-app-text-muted" />
-                  </button>
-                </div>
+            {
+              selectedArtist && artistDetails && (
+                <div className="fixed inset-0 z-[100] bg-app-bg text-app-text overflow-y-auto animate-in fade-in duration-200 custom-scrollbar">
+                  {/* Header Bar */}
+                  <div className="sticky top-0 z-50 bg-app-bg border-b border-app-surface px-6 py-4 flex items-center justify-between">
+                    <button
+                      onClick={() => setSelectedArtist(null)}
+                      className="p-2 hover:bg-app-surface rounded-full transition-colors"
+                    >
+                      <X size={20} className="text-app-text-muted" />
+                    </button>
+                  </div>
 
-                <div className="max-w-5xl mx-auto px-8 pt-12 pb-32">
-                  {/* Hero */}
-                  <div className="flex flex-col gap-6 mb-12">
-                    {/* Info Only - No Image */}
-                    <div className="flex flex-col justify-center text-center items-center">
-                      <h1 className="text-5xl md:text-8xl font-serif font-bold text-app-text mb-6">
-                        {artistDetails.artist.name}
-                      </h1>
-                      {/* Stats */}
-                      <div className="flex gap-6 text-sm text-app-text-muted font-medium mb-6">
-                        {artistDetails.artist.country && <span>{artistDetails.artist.country}</span>}
-                        {artistDetails.artist.begin_date && <span>Est. {artistDetails.artist.begin_date}</span>}
-                        <span>{artistDetails.totalTracks} Tracks in Library</span>
-                      </div>
-
-                      {/* Labels (Searchable) */}
-                      {artistDetails.labels && artistDetails.labels.length > 0 && (
-                        <div className="flex flex-wrap justify-center gap-2 mb-8">
-                          {artistDetails.labels.map(l => (
-                            <button
-                              key={l}
-                              onClick={() => {
-                                setSearchQuery(l);
-                                setSelectedArtist(null);
-                                // Optional: trigger search effect
-                              }}
-                              className="px-3 py-1 rounded-full bg-app-surface text-xs text-app-text-muted border border-app-surface/50 hover:bg-white/10 hover:border-white/30 hover:text-white transition-colors uppercase tracking-wider"
-                            >
-                              {l}
-                            </button>
-                          ))}
+                  <div className="max-w-5xl mx-auto px-8 pt-12 pb-32">
+                    {/* Hero */}
+                    <div className="flex flex-col gap-6 mb-12">
+                      {/* Info Only - No Image */}
+                      <div className="flex flex-col justify-center text-center items-center">
+                        <h1 className="text-5xl md:text-8xl font-serif font-bold text-app-text mb-6">
+                          {artistDetails.artist.name}
+                        </h1>
+                        {/* Stats */}
+                        <div className="flex gap-6 text-sm text-app-text-muted font-medium mb-6">
+                          {artistDetails.artist.country && <span>{artistDetails.artist.country}</span>}
+                          {artistDetails.artist.begin_date && <span>Est. {artistDetails.artist.begin_date}</span>}
+                          <span>{artistDetails.totalTracks} Tracks in Library</span>
                         </div>
-                      )}
 
-                      {/* Bio */}
-                      {artistDetails.artist.description ? (
-                        <div className="max-w-3xl mx-auto">
-                          <p className="text-base text-app-text-muted leading-relaxed mb-4">
-                            {artistDetails.artist.description.replace(/<[^>]*>?/gm, '')}
-                          </p>
-                          <div className="flex gap-4 justify-center text-sm">
-                            {artistDetails.artist.wiki_url && (
-                              <a
-                                href={artistDetails.artist.wiki_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-app-accent hover:underline"
+                        {/* Labels (Searchable) */}
+                        {artistDetails.labels && artistDetails.labels.length > 0 && (
+                          <div className="flex flex-wrap justify-center gap-2 mb-8">
+                            {artistDetails.labels.map(l => (
+                              <button
+                                key={l}
+                                onClick={() => {
+                                  setSearchQuery(l);
+                                  setSelectedArtist(null);
+                                  // Optional: trigger search effect
+                                }}
+                                className="px-3 py-1 rounded-full bg-app-surface text-xs text-app-text-muted border border-app-surface/50 hover:bg-white/10 hover:border-white/30 hover:text-white transition-colors uppercase tracking-wider"
                               >
-                                Read more on Wikipedia →
-                              </a>
-                            )}
+                                {l}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Bio */}
+                        {artistDetails.artist.description ? (
+                          <div className="max-w-3xl mx-auto">
+                            <p className="text-base text-app-text-muted leading-relaxed mb-4">
+                              {artistDetails.artist.description.replace(/<[^>]*>?/gm, '')}
+                            </p>
+                            <div className="flex gap-4 justify-center text-sm">
+                              {artistDetails.artist.wiki_url && (
+                                <a
+                                  href={artistDetails.artist.wiki_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-app-accent hover:underline"
+                                >
+                                  Read more on Wikipedia →
+                                </a>
+                              )}
+                              {artistDetails.artist.mbid && (
+                                <a
+                                  href={`https://musicbrainz.org/artist/${artistDetails.artist.mbid}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-app-accent hover:underline"
+                                >
+                                  View on MusicBrainz →
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-app-text-muted italic">
+                            No biography available.
                             {artistDetails.artist.mbid && (
                               <a
                                 href={`https://musicbrainz.org/artist/${artistDetails.artist.mbid}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-app-accent hover:underline"
+                                className="text-app-accent hover:underline ml-2"
                               >
                                 View on MusicBrainz →
                               </a>
                             )}
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="text-sm text-app-text-muted italic">
-                          No biography available.
-                          {artistDetails.artist.mbid && (
-                            <a
-                              href={`https://musicbrainz.org/artist/${artistDetails.artist.mbid}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-app-accent hover:underline ml-2"
-                            >
-                              View on MusicBrainz →
-                            </a>
-                          )}
-                        </p>
-                      )}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Tabs */}
-                  <div className="flex items-center gap-8 mb-8 border-b border-app-surface">
-                    <button
-                      onClick={() => setActiveTab('discography')}
-                      className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'discography' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
-                    >
-                      Discography
-                    </button>
-                    <button
-                      onClick={() => setActiveTab('credits')}
-                      className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'credits' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
-                    >
-                      Credits & Apperances
-                    </button>
-                  </div>
+                    {/* Tabs */}
+                    <div className="flex items-center gap-8 mb-8 border-b border-app-surface">
+                      <button
+                        onClick={() => setActiveTab('discography')}
+                        className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'discography' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
+                      >
+                        Discography
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('credits')}
+                        className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'credits' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
+                      >
+                        Credits & Apperances
+                      </button>
+                    </div>
 
-                  {/* Content */}
-                  <div className="min-h-[400px]">
-                    {activeTab === 'discography' && (
-                      <div className="space-y-12">
-                        {(() => {
-                          const groups = {};
-                          if (artistDetails.albums) {
-                            artistDetails.albums.forEach(album => {
-                              // Default to 'Album' if type is missing (likely local files)
-                              const type = album.primary_type || 'Album';
-                              if (!groups[type]) groups[type] = [];
-                              groups[type].push(album);
+                    {/* Content */}
+                    <div className="min-h-[400px]">
+                      {activeTab === 'discography' && (
+                        <div className="space-y-12">
+                          {(() => {
+                            const groups = {};
+                            if (artistDetails.albums) {
+                              artistDetails.albums.forEach(album => {
+                                // Default to 'Album' if type is missing (likely local files)
+                                const type = album.primary_type || 'Album';
+                                if (!groups[type]) groups[type] = [];
+                                groups[type].push(album);
+                              });
+                            }
+                            const order = ['Album', 'EP', 'Single', 'Other'];
+                            const keys = Object.keys(groups).sort((a, b) => {
+                              const ixA = order.indexOf(a);
+                              const ixB = order.indexOf(b);
+                              return (ixA === -1 ? 99 : ixA) - (ixB === -1 ? 99 : ixB);
                             });
-                          }
-                          const order = ['Album', 'EP', 'Single', 'Other'];
-                          const keys = Object.keys(groups).sort((a, b) => {
-                            const ixA = order.indexOf(a);
-                            const ixB = order.indexOf(b);
-                            return (ixA === -1 ? 99 : ixA) - (ixB === -1 ? 99 : ixB);
-                          });
 
-                          if (keys.length === 0) return <div className="text-center text-app-text-muted py-12">No releases found.</div>;
+                            if (keys.length === 0) return <div className="text-center text-app-text-muted py-12">No releases found.</div>;
 
-                          return keys.map(type => (
-                            <div key={type}>
-                              <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-6 border-b border-app-surface/50 pb-2">{type}s</h3>
-                              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-                                {groups[type].map(album => (
-                                  <div
-                                    key={album.release_mbid || album.album}
-                                    className="group cursor-pointer"
-                                    onClick={() => {
-                                      const target = albums.find(a => a.name === album.album);
-                                      if (target) {
-                                        setSelectedArtist(null);
-                                        setSelectedAlbum(target);
-                                      }
-                                    }}
-                                  >
-                                    <div className="aspect-square bg-app-surface rounded-lg mb-3 overflow-hidden shadow-lg group-hover:scale-105 transition-transform">
-                                      {album.art_path ? (
-                                        <img src={`${SERVER_URL}/api/art/release/${album.release_mbid}/front`} alt={album.album} className="w-full h-full object-cover" />
-                                      ) : album.sample_track_id ? (
-                                        <img src={`${SERVER_URL}/api/art/${album.sample_track_id}`} alt={album.album} className="w-full h-full object-cover" />
-                                      ) : (
-                                        <div className="w-full h-full flex items-center justify-center">
-                                          <Disc size={32} className="text-app-text-muted" />
-                                        </div>
-                                      )}
+                            return keys.map(type => (
+                              <div key={type}>
+                                <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-6 border-b border-app-surface/50 pb-2">{type}s</h3>
+                                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
+                                  {groups[type].map(album => (
+                                    <div
+                                      key={album.release_mbid || album.album}
+                                      className="group cursor-pointer"
+                                      onClick={() => {
+                                        const target = albums.find(a => a.name === album.album);
+                                        if (target) {
+                                          setSelectedArtist(null);
+                                          setSelectedAlbum(target);
+                                        }
+                                      }}
+                                    >
+                                      <div className="aspect-square bg-app-surface rounded-lg mb-3 overflow-hidden shadow-lg group-hover:scale-105 transition-transform">
+                                        {album.art_path ? (
+                                          <img src={`${SERVER_URL}/api/art/release/${album.release_mbid}/front`} alt={album.album} className="w-full h-full object-cover" />
+                                        ) : album.sample_track_id ? (
+                                          <img src={`${SERVER_URL}/api/art/${album.sample_track_id}`} alt={album.album} className="w-full h-full object-cover" />
+                                        ) : (
+                                          <div className="w-full h-full flex items-center justify-center">
+                                            <Disc size={32} className="text-app-text-muted" />
+                                          </div>
+                                        )}
+                                      </div>
+                                      <h3 className="font-medium text-sm truncate">{album.title || album.album}</h3>
+                                      <p className="text-xs text-app-text-muted">
+                                        {album.release_date
+                                          ? album.release_date.substring(0, 4)
+                                          : album.track_year
+                                            ? album.track_year
+                                            : ''}
+                                      </p>
                                     </div>
-                                    <h3 className="font-medium text-sm truncate">{album.title || album.album}</h3>
-                                    <p className="text-xs text-app-text-muted">
-                                      {album.release_date
-                                        ? album.release_date.substring(0, 4)
-                                        : album.track_year
-                                          ? album.track_year
-                                          : ''}
-                                    </p>
+                                  ))}
+                                </div>
+                              </div>
+                            ));
+                          })()}
+                        </div>
+                      )}
+
+                      {activeTab === 'credits' && (
+                        <div className="space-y-8">
+                          {Object.entries(artistDetails.credits).map(([role, credits]) => (
+                            <div key={role}>
+                              <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-4 border-b border-app-surface/50 pb-2">{role}</h3>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                {(credits as any[]).map((credit, i) => (
+                                  <div key={i} className="flex justify-between items-center p-2 rounded hover:bg-app-surface transition-colors">
+                                    <div className="min-w-0">
+                                      <div className="text-sm font-medium text-app-text truncate">{credit.title}</div>
+                                      <div className="text-xs text-app-text-muted truncate">{credit.album} • {credit.track_artist}</div>
+                                    </div>
+                                    <button
+                                      onClick={() => {
+                                        if (!Array.isArray(tracks)) return;
+                                        const idx = tracks.findIndex(t => t.id === credit.track_id);
+                                        if (idx !== -1) {
+                                          playTrack(idx, 'cut');
+                                        } else {
+                                          alert("Track not in current active playlist view");
+                                        }
+                                      }}
+                                      className="p-1.5 rounded-full hover:bg-app-accent/20 text-app-text-muted hover:text-white"
+                                    >
+                                      <Play size={12} fill="currentColor" />
+                                    </button>
                                   </div>
                                 ))}
                               </div>
                             </div>
-                          ));
-                        })()}
-                      </div>
-                    )}
-
-                    {activeTab === 'credits' && (
-                      <div className="space-y-8">
-                        {Object.entries(artistDetails.credits).map(([role, credits]) => (
-                          <div key={role}>
-                            <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-4 border-b border-app-surface/50 pb-2">{role}</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                              {(credits as any[]).map((credit, i) => (
-                                <div key={i} className="flex justify-between items-center p-2 rounded hover:bg-app-surface transition-colors">
-                                  <div className="min-w-0">
-                                    <div className="text-sm font-medium text-app-text truncate">{credit.title}</div>
-                                    <div className="text-xs text-app-text-muted truncate">{credit.album} • {credit.track_artist}</div>
-                                  </div>
-                                  <button
-                                    onClick={() => {
-                                      if (!Array.isArray(tracks)) return;
-                                      const idx = tracks.findIndex(t => t.id === credit.track_id);
-                                      if (idx !== -1) {
-                                        playTrack(idx, 'cut');
-                                      } else {
-                                        alert("Track not in current active playlist view");
-                                      }
-                                    }}
-                                    className="p-1.5 rounded-full hover:bg-app-accent/20 text-app-text-muted hover:text-white"
-                                  >
-                                    <Play size={12} fill="currentColor" />
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Detail View Overlay - Dark Theme */}
-            {selectedAlbum && (
-              <div className="fixed inset-0 z-[100] bg-app-bg text-app-text overflow-y-auto animate-in fade-in duration-200 custom-scrollbar">
-
-                {/* Header Bar */}
-                <div className="sticky top-0 z-50 bg-app-bg border-b border-app-surface px-6 py-4 flex items-center justify-between">
-                  <button
-                    onClick={() => setSelectedAlbum(null)}
-                    className="p-2 hover:bg-app-surface rounded-full transition-colors"
-                  >
-                    <X size={20} className="text-app-text-muted" />
-                  </button>
-                  <div className="flex items-center gap-2 text-sm text-app-text-muted">
-                    {/* Breadcrumb or additional controls could go here */}
-                  </div>
-                </div>
-
-                {/* Main Content Container */}
-                <div className="max-w-5xl mx-auto px-8 py-12">
-
-                  {/* Hero Section */}
-                  <div className="flex flex-col md:flex-row gap-8 mb-8">
-
-                    {/* Album Artwork - Fixed 320px */}
-                    {/* Album Artwork - Fixed 320px with Flip Effect */}
-                    <div className="shrink-0 perspective-[1000px]">
-                      <div
-                        className={`w-64 h-64 relative transition-transform duration-700 [transform-style:preserve-3d] ${albumMetadata?.images?.find(i => i.type === 'back') ? 'cursor-pointer' : ''} ${isFlipped ? '[transform:rotateY(180deg)]' : ''}`}
-                        onClick={() => albumMetadata?.images?.find(i => i.type === 'back') && setIsFlipped(!isFlipped)}
-                      >
-                        {/* Front Face */}
-                        <div className="absolute inset-0 [backface-visibility:hidden] rounded-sm overflow-hidden shadow-lg bg-app-surface">
-                          {selectedAlbum.tracks[0].has_art ? (
-                            <img
-                              src={`${SERVER_URL}/api/art/${selectedAlbum.tracks[0].id}`}
-                              alt={selectedAlbum.name}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center">
-                              <Disc size={64} className="text-app-text-muted" />
-                            </div>
-                          )}
-
-                          {/* Hint to flip if back art exists */}
-                          {albumMetadata?.images?.find(i => i.type === 'back') && (
-                            <div className="absolute bottom-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full backdrop-blur-sm transition-colors" title="View Back Cover">
-                              <RefreshCcw size={14} />
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Back Face */}
-                        <div className="absolute inset-0 [backface-visibility:hidden] [transform:rotateY(180deg)] rounded-sm overflow-hidden shadow-lg bg-app-surface border border-app-surface">
-                          {albumMetadata?.images?.find(i => i.type === 'back') ? (
-                            <img
-                              src={`${SERVER_URL}/api/art/release/${albumMetadata.release.mbid}/back`}
-                              alt="Back Cover"
-                              className="w-full h-full object-contain bg-black"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-app-text-muted text-xs">
-                              No Back Cover
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Album Info */}
-                    <div className="flex-1 flex flex-col justify-end min-w-0">
-
-                      {/* Album Title - Serif Font */}
-                      <h1 className="text-5xl md:text-6xl font-serif font-normal leading-tight mb-3 text-app-text">
-                        {selectedAlbum.name}
-                      </h1>
-
-                      {/* Artist */}
-                      <button
-                        onClick={() => {
-                          const artist = artists.find(a => a.name === selectedAlbum.artist);
-                          if (artist) {
-                            setSelectedAlbum(null); // Close album detail
-                            setSelectedArtist(artist); // Open artist detail
-                          }
-                        }}
-                        className="text-lg text-app-text-muted hover:text-app-text hover:underline self-start mb-4"
-                      >
-                        {selectedAlbum.artist}
-                      </button>
-
-                      {/* Metadata Line */}
-                      <div className="flex flex-wrap gap-4 text-sm text-app-text-muted font-medium mb-4">
-                        <span>{selectedAlbum.genre || 'Unknown Genre'}</span>
-                        {selectedAlbum.year && (
-                          <>
-                            <span>•</span>
-                            <span>{selectedAlbum.year}</span>
-                          </>
-                        )}
-                        {selectedAlbum.tracks.length > 0 && (
-                          <>
-                            <span>•</span>
-                            <span>{selectedAlbum.tracks.length} Songs</span>
-                            <span>•</span>
-                            <span>
-                              {Math.floor(selectedAlbum.tracks.reduce((acc, t) => acc + t.duration, 0) / 60)} min
-                            </span>
-                          </>
-                        )}
-                        {albumMetadata?.label && (
-                          <>
-                            <span>•</span>
-                            <span
-                              className="text-app-text hover:text-app-accent cursor-pointer"
-                              title="Record Label"
-                              onClick={() => handleDeepLink(albumMetadata.label.name)}
-                            >
-                              {albumMetadata.label.name}
-                            </span>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Genre Tags */}
-                      {albumMetadata?.tags && albumMetadata.tags.length > 0 && (
-                        <div className="flex flex-wrap gap-2 mt-2">
-                          {albumMetadata.tags.map((tag, i) => (
-                            <span
-                              key={i}
-                              className="px-2 py-0.5 rounded-full bg-app-surface/50 border border-app-surface text-xs text-app-text-muted hover:text-white hover:border-app-accent transition-colors cursor-pointer"
-                              title="Filter by this tag"
-                              onClick={() => handleDeepLink(tag.name)}
-                            >
-                              {tag.name}
-                            </span>
                           ))}
                         </div>
                       )}
-
-                      {/* Action Buttons */}
-                      <div className="flex gap-4 mt-6">
-                        <button
-                          onClick={() => {
-                            const idx = Array.isArray(tracks) ? tracks.findIndex(t => t.album === selectedAlbum.name) : -1;
-                            if (idx !== -1) {
-                              playTrack(idx, 'cut');
-                              setShowNowPlaying(true);
-                            }
-                          }}
-                          className="bg-white/5 border border-white/10 hover:bg-white/10 text-white px-6 py-2.5 rounded-full font-medium text-sm flex items-center gap-2 shadow-sm transition-all"
-                        >
-                          <Play size={16} fill="currentColor" />
-                          Play now
-                        </button>
-                        <button
-                          onClick={(e) => toggleFavorite(e, selectedAlbum.tracks[0].id)}
-                          className="p-2.5 hover:bg-app-surface rounded-full transition-colors"
-                        >
-                          <svg className={`w-5 h-5 transition-colors ${selectedAlbum.tracks[0].rating === 1 ? 'text-app-accent fill-app-accent' : 'text-app-text-muted'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                          </svg>
-                        </button>
-                        <button
-                          onClick={addToQueue}
-                          title="Add to Queue"
-                          className="p-2.5 hover:bg-app-surface rounded-full transition-colors"
-                        >
-                          <svg className="w-5 h-5 text-app-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" className="hidden" />
-                          </svg>
-                          {/* Replaced Dots with Plus Circle for "Add to Library/Queue" metaphor */}
-                          <PlusCircle size={20} className="text-app-text-muted" />
-                        </button>
-                      </div>
-
-
                     </div>
                   </div>
+                </div>
+              )
+            }
 
-                  {/* Description & Metadata Grid */}
-                  <div className="grid md:grid-cols-3 gap-8 mb-8 pb-8 border-b border-app-surface">
+            {/* Detail View Overlay - Dark Theme */}
+            {
+              selectedAlbum && (
+                <div className="fixed inset-0 z-[100] bg-app-bg text-app-text overflow-y-auto animate-in fade-in duration-200 custom-scrollbar">
 
-                    {/* Description Column */}
-                    <div className="md:col-span-2">
-                      <p className="text-sm text-app-text-muted leading-relaxed line-clamp-6">
-                        {albumMetadata?.release?.description
-                          ? albumMetadata.release.description.replace(/<[^>]*>?/gm, '') // Strip HTML
-                          : selectedAlbum.tracks[0].genre
-                            ? `A ${selectedAlbum.tracks[0].genre} album by ${selectedAlbum.artist}.`
-                            : "No description available."
-                        }
-                      </p>
-                      {/* Track count debug */}
-                      <p className="mt-2 text-sm text-app-text-muted">Tracks: {selectedAlbum.tracks.length}</p>
-                    </div>
-
-                    {/* Stats Column */}
-                    <div className="space-y-3 text-sm">
-                      <div>
-                        <div className="text-app-text-muted mb-1">Length</div>
-                        <div className="text-app-text font-medium">
-                          {Math.floor(selectedAlbum.tracks.reduce((acc, t) => acc + t.duration, 0) / 60)} minutes
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-app-text-muted mb-1">Format</div>
-                        <div className="text-app-text font-medium flex items-center gap-1">
-                          {selectedAlbum.tracks[0].format || 'FLAC'}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Tabs */}
-                  <div className="flex items-center justify-center gap-8 mb-8 border-b border-app-surface sticky top-0 bg-app-bg z-10 transition-all">
+                  {/* Header Bar */}
+                  <div className="sticky top-0 z-50 bg-app-bg border-b border-app-surface px-6 py-4 flex items-center justify-between">
                     <button
-                      onClick={() => setActiveTab('tracks')}
-                      className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'tracks' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
+                      onClick={() => setSelectedAlbum(null)}
+                      className="p-2 hover:bg-app-surface rounded-full transition-colors"
                     >
-                      Tracks
+                      <X size={20} className="text-app-text-muted" />
                     </button>
-                    <button
-                      onClick={() => setActiveTab('credits')}
-                      className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'credits' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
-                    >
-                      Credits
-                    </button>
+                    <div className="flex items-center gap-2 text-sm text-app-text-muted">
+                      {/* Breadcrumb or additional controls could go here */}
+                    </div>
                   </div>
 
-                  {/* Tracklist vs Credits Content - Added pb-32 for floating dock clearance */}
-                  <div className="space-y-1 pb-32">
-                    {activeTab === 'tracks' ? (
-                      selectedAlbum.tracks.map((track, i) => (
+                  {/* Main Content Container */}
+                  <div className="max-w-5xl mx-auto px-8 py-12">
+
+                    {/* Hero Section */}
+                    <div className="flex flex-col md:flex-row gap-8 mb-8">
+
+                      {/* Album Artwork - Fixed 320px */}
+                      {/* Album Artwork - Fixed 320px with Flip Effect */}
+                      <div className="shrink-0 perspective-[1000px]">
                         <div
-                          key={track.id}
-                          onClick={() => {
-                            const idx = Array.isArray(tracks) ? tracks.findIndex(t => t.id === track.id) : -1;
-                            if (idx !== -1) {
-                              playTrack(idx, 'cut');
-                              setShowNowPlaying(true);
-                            }
-                          }}
-                          className="group flex items-center gap-4 px-4 py-3 hover:bg-app-surface rounded-md cursor-pointer transition-colors"
+                          className={`w-64 h-64 relative transition-transform duration-700 [transform-style:preserve-3d] ${albumMetadata?.images?.find(i => i.type === 'back') ? 'cursor-pointer' : ''} ${isFlipped ? '[transform:rotateY(180deg)]' : ''}`}
+                          onClick={() => albumMetadata?.images?.find(i => i.type === 'back') && setIsFlipped(!isFlipped)}
                         >
-                          {/* Track Number / Play Icon */}
-                          <div className="w-8 text-center text-sm text-app-text-muted group-hover:text-app-accent font-medium">
-                            <span className="group-hover:hidden">{i + 1}</span>
-                            <Play size={14} fill="currentColor" className="hidden group-hover:inline-block" />
-                          </div>
+                          {/* Front Face */}
+                          <div className="absolute inset-0 [backface-visibility:hidden] rounded-sm overflow-hidden shadow-lg bg-app-surface">
+                            {selectedAlbum.tracks[0].has_art ? (
+                              <img
+                                src={`${SERVER_URL}/api/art/${selectedAlbum.tracks[0].id}`}
+                                alt={selectedAlbum.name}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center">
+                                <Disc size={64} className="text-app-text-muted" />
+                              </div>
+                            )}
 
-                          {/* Title */}
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-app-text truncate">{track.title}</div>
-                            {track.artist !== selectedAlbum.artist && (
-                              <div className="text-sm text-app-text-muted truncate">{track.artist}</div>
+                            {/* Hint to flip if back art exists */}
+                            {albumMetadata?.images?.find(i => i.type === 'back') && (
+                              <div className="absolute bottom-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full backdrop-blur-sm transition-colors" title="View Back Cover">
+                                <RefreshCcw size={14} />
+                              </div>
                             )}
                           </div>
 
-                          {/* Duration */}
-                          <div className="text-sm text-app-text-muted font-mono tabular-nums">
-                            {Math.floor(track.duration / 60)}:{(Math.floor(track.duration % 60)).toString().padStart(2, '0')}
+                          {/* Back Face */}
+                          <div className="absolute inset-0 [backface-visibility:hidden] [transform:rotateY(180deg)] rounded-sm overflow-hidden shadow-lg bg-app-surface border border-app-surface">
+                            {albumMetadata?.images?.find(i => i.type === 'back') ? (
+                              <img
+                                src={`${SERVER_URL}/api/art/release/${albumMetadata.release.mbid}/back`}
+                                alt="Back Cover"
+                                className="w-full h-full object-contain bg-black"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-app-text-muted text-xs">
+                                No Back Cover
+                              </div>
+                            )}
                           </div>
-
-                          {/* Heart Icon */}
-                          <button
-                            onClick={(e) => toggleFavorite(e, track.id)}
-                            className={`p-1 hover:bg-white/10 rounded transition-all ${track.rating === 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-                          >
-                            <svg className={`w-4 h-4 transition-colors ${track.rating === 1 ? 'text-app-accent fill-app-accent' : 'text-app-text-muted'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                            </svg>
-                          </button>
                         </div>
-                      ))
-                    ) : (
-                      /* Credits View - Grouped by Role */
-                      <div className="space-y-6 px-4">
-                        {Object.keys(albumCredits).length > 0 ? (
-                          Object.entries(albumCredits)
-                            .filter(([role]) => role !== 'Lyricist') // Remove Lyricist as requested
-                            .map(([role, credits]) => (
-                              <div key={role} className="mb-6">
-                                <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-3 border-b border-app-surface pb-2">
-                                  {role}
-                                </h3>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
-                                  {(credits as any[]).map((credit, idx) => (
-                                    <button
-                                      key={idx}
-                                      onClick={() => {
-                                        if (credit.artist_mbid) {
-                                          // TODO: Open artist detail panel
-                                          console.log('Open artist:', credit.artist_mbid);
-                                        }
-                                        handleDeepLink(credit.name);
-                                      }}
-                                      className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-app-surface transition-colors text-left group"
-                                    >
-                                      <div className="w-8 h-8 rounded-full bg-app-surface flex items-center justify-center text-xs font-medium text-app-text-muted group-hover:bg-white/10 group-hover:text-white transition-colors border border-transparent group-hover:border-white/20">
-                                        {credit.name?.charAt(0).toUpperCase()}
-                                      </div>
-                                      <div className="flex-1 min-w-0">
-                                        <div className="font-medium text-app-text truncate group-hover:text-app-accent transition-colors">
-                                          {credit.name}
-                                        </div>
-                                        {credit.instrument && (
-                                          <div className="text-xs text-app-text-muted truncate">
-                                            {credit.instrument}
-                                          </div>
-                                        )}
-                                      </div>
-                                      {credit.artist_mbid && (
-                                        <svg className="w-4 h-4 text-app-text-muted opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                        </svg>
-                                      )}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            ))
-                        ) : (
-                          <div className="py-12 text-center">
-                            <div className="text-app-text-muted mb-4">No detailed credits available.</div>
-                          </div>
-                        )}
+                      </div>
 
-                        {/* Always show Enrich button (or progress) at the bottom */}
-                        <div className="mt-8 pt-8 border-t border-app-surface flex flex-col items-center">
-                          {enrichmentStatus.isEnriching ? (
-                            <div className="w-full max-w-sm">
-                              <div className="flex justify-between text-xs text-app-text-muted mb-2">
-                                <span>Enriching Library...</span>
-                                <span>{enrichmentStatus.processed} / {enrichmentStatus.total}</span>
-                              </div>
-                              <div className="w-full h-1.5 bg-app-surface rounded-full overflow-hidden">
-                                <div
-                                  className="h-full bg-white/80 shadow-[0_0_10px_rgba(255,255,255,0.3)] transition-all duration-300 ease-out"
-                                  style={{ width: `${(enrichmentStatus.processed / (enrichmentStatus.total || 1)) * 100}%` }}
-                                />
-                              </div>
-                              {enrichmentStatus.currentTrack && (
-                                <div className="text-xs text-app-text-muted mt-2 text-center truncate">
-                                  {enrichmentStatus.currentTrack}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
+                      {/* Album Info */}
+                      <div className="flex-1 flex flex-col justify-end min-w-0">
+
+                        {/* Album Title - Serif Font */}
+                        <h1 className="text-5xl md:text-6xl font-serif font-normal leading-tight mb-3 text-app-text">
+                          {selectedAlbum.name}
+                        </h1>
+
+                        {/* Artist */}
+                        <button
+                          onClick={() => {
+                            const artist = artists.find(a => a.name === selectedAlbum.artist);
+                            if (artist) {
+                              setSelectedAlbum(null); // Close album detail
+                              setSelectedArtist(artist); // Open artist detail
+                            }
+                          }}
+                          className="text-lg text-app-text-muted hover:text-app-text hover:underline self-start mb-4"
+                        >
+                          {selectedAlbum.artist}
+                        </button>
+
+                        {/* Metadata Line */}
+                        <div className="flex flex-wrap gap-4 text-sm text-app-text-muted font-medium mb-4">
+                          <span>{selectedAlbum.genre || 'Unknown Genre'}</span>
+                          {selectedAlbum.year && (
                             <>
-                              <button
-                                onClick={async () => {
-                                  try {
-                                    await axios.post(`${SERVER_URL}/api/enrich`);
-                                    // Status will update via polling
-                                  } catch (e) {
-                                    console.error("Enrichment failed:", e);
-                                  }
-                                }}
-                                className="px-4 py-2 bg-app-surface border border-white/5 hover:bg-white/10 hover:border-white/20 hover:text-white text-app-text-muted rounded-lg transition-colors text-sm flex items-center gap-2"
+                              <span>•</span>
+                              <span>{selectedAlbum.year}</span>
+                            </>
+                          )}
+                          {selectedAlbum.tracks.length > 0 && (
+                            <>
+                              <span>•</span>
+                              <span>{selectedAlbum.tracks.length} Songs</span>
+                              <span>•</span>
+                              <span>
+                                {Math.floor(selectedAlbum.tracks.reduce((acc, t) => acc + t.duration, 0) / 60)} min
+                              </span>
+                            </>
+                          )}
+                          {albumMetadata?.label && (
+                            <>
+                              <span>•</span>
+                              <span
+                                className="text-app-text hover:text-app-accent cursor-pointer"
+                                title="Record Label"
+                                onClick={() => handleDeepLink(albumMetadata.label.name)}
                               >
-                                <span>🎵</span>
-                                <span>Enrich with MusicBrainz</span>
-                              </button>
-                              <p className="text-xs text-app-text-muted mt-2">Fetches producer, engineer, labels, and genre tags</p>
+                                {albumMetadata.label.name}
+                              </span>
                             </>
                           )}
                         </div>
-                      </div>
-                    )}
 
-                    {/* Album Footer Info - Copyright & Labels */}
-                    <div className="mt-12 pt-8 border-t border-app-surface/30 text-center">
-                      <div className="text-sm font-medium text-app-text-muted">
-                        © {selectedAlbum.year || ''} {albumMetadata?.label?.name || selectedAlbum.artist}
-                      </div>
-                      <div className="flex flex-col items-center gap-1 mt-2 text-xs text-app-text-muted/60 font-mono">
-                        {albumMetadata?.label?.name && (
-                          <span>Released by {albumMetadata.label.name}</span>
+                        {/* Genre Tags */}
+                        {albumMetadata?.tags && albumMetadata.tags.length > 0 && (
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {albumMetadata.tags.map((tag, i) => (
+                              <span
+                                key={i}
+                                className="px-2 py-0.5 rounded-full bg-app-surface/50 border border-app-surface text-xs text-app-text-muted hover:text-white hover:border-app-accent transition-colors cursor-pointer"
+                                title="Filter by this tag"
+                                onClick={() => handleDeepLink(tag.name)}
+                              >
+                                {tag.name}
+                              </span>
+                            ))}
+                          </div>
                         )}
-                        {albumMetadata?.release?.country && (
-                          <span>{albumMetadata.release.country} Release</span>
-                        )}
-                        {albumMetadata?.release?.barcode && (
-                          <span className="opacity-50">UPC: {albumMetadata.release.barcode}</span>
-                        )}
-                      </div>
-                      <div className="mt-6 flex justify-center gap-4 opacity-40 grayscale hover:grayscale-0 transition-all duration-500">
-                        {/* Placeholder for label logos / copyright badges */}
-                        <Disc size={24} />
+
+                        {/* Action Buttons */}
+                        <div className="flex gap-4 mt-6">
+                          <button
+                            onClick={() => {
+                              const idx = Array.isArray(tracks) ? tracks.findIndex(t => t.album === selectedAlbum.name) : -1;
+                              if (idx !== -1) {
+                                playTrack(idx, 'cut');
+                                setShowNowPlaying(true);
+                              }
+                            }}
+                            className="bg-white/5 border border-white/10 hover:bg-white/10 text-white px-6 py-2.5 rounded-full font-medium text-sm flex items-center gap-2 shadow-sm transition-all"
+                          >
+                            <Play size={16} fill="currentColor" />
+                            Play now
+                          </button>
+                          <button
+                            onClick={(e) => toggleFavorite(e, selectedAlbum.tracks[0].id)}
+                            className="p-2.5 hover:bg-app-surface rounded-full transition-colors"
+                          >
+                            <svg className={`w-5 h-5 transition-colors ${selectedAlbum.tracks[0].rating === 1 ? 'text-app-accent fill-app-accent' : 'text-app-text-muted'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={addToQueue}
+                            title="Add to Queue"
+                            className="p-2.5 hover:bg-app-surface rounded-full transition-colors"
+                          >
+                            <svg className="w-5 h-5 text-app-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" className="hidden" />
+                            </svg>
+                            {/* Replaced Dots with Plus Circle for "Add to Library/Queue" metaphor */}
+                            <PlusCircle size={20} className="text-app-text-muted" />
+                          </button>
+                        </div>
+
+
                       </div>
                     </div>
-                  </div>
 
+                    {/* Description & Metadata Grid */}
+                    <div className="grid md:grid-cols-3 gap-8 mb-8 pb-8 border-b border-app-surface">
+
+                      {/* Description Column */}
+                      <div className="md:col-span-2">
+                        <p className="text-sm text-app-text-muted leading-relaxed line-clamp-6">
+                          {albumMetadata?.release?.description
+                            ? albumMetadata.release.description.replace(/<[^>]*>?/gm, '') // Strip HTML
+                            : selectedAlbum.tracks[0].genre
+                              ? `A ${selectedAlbum.tracks[0].genre} album by ${selectedAlbum.artist}.`
+                              : "No description available."
+                          }
+                        </p>
+                        {/* Track count debug */}
+                        <p className="mt-2 text-sm text-app-text-muted">Tracks: {selectedAlbum.tracks.length}</p>
+                      </div>
+
+                      {/* Stats Column */}
+                      <div className="space-y-3 text-sm">
+                        <div>
+                          <div className="text-app-text-muted mb-1">Length</div>
+                          <div className="text-app-text font-medium">
+                            {Math.floor(selectedAlbum.tracks.reduce((acc, t) => acc + t.duration, 0) / 60)} minutes
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-app-text-muted mb-1">Format</div>
+                          <div className="text-app-text font-medium flex items-center gap-1">
+                            {selectedAlbum.tracks[0].format || 'FLAC'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Tabs */}
+                    <div className="flex items-center justify-center gap-8 mb-8 border-b border-app-surface sticky top-0 bg-app-bg z-10 transition-all">
+                      <button
+                        onClick={() => setActiveTab('tracks')}
+                        className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'tracks' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
+                      >
+                        Tracks
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('credits')}
+                        className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'credits' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
+                      >
+                        Credits
+                      </button>
+                    </div>
+
+                    {/* Tracklist vs Credits Content - Added pb-32 for floating dock clearance */}
+                    <div className="space-y-1 pb-32">
+                      {activeTab === 'tracks' ? (
+                        selectedAlbum.tracks.map((track, i) => (
+                          <div
+                            key={track.id}
+                            onClick={() => {
+                              const idx = Array.isArray(tracks) ? tracks.findIndex(t => t.id === track.id) : -1;
+                              if (idx !== -1) {
+                                playTrack(idx, 'cut');
+                                setShowNowPlaying(true);
+                              }
+                            }}
+                            className="group flex items-center gap-4 px-4 py-3 hover:bg-app-surface rounded-md cursor-pointer transition-colors"
+                          >
+                            {/* Track Number / Play Icon */}
+                            <div className="w-8 text-center text-sm text-app-text-muted group-hover:text-app-accent font-medium">
+                              <span className="group-hover:hidden">{i + 1}</span>
+                              <Play size={14} fill="currentColor" className="hidden group-hover:inline-block" />
+                            </div>
+
+                            {/* Title */}
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium text-app-text truncate">{track.title}</div>
+                              {track.artist !== selectedAlbum.artist && (
+                                <div className="text-sm text-app-text-muted truncate">{track.artist}</div>
+                              )}
+                            </div>
+
+                            {/* Duration */}
+                            <div className="text-sm text-app-text-muted font-mono tabular-nums">
+                              {Math.floor(track.duration / 60)}:{(Math.floor(track.duration % 60)).toString().padStart(2, '0')}
+                            </div>
+
+                            {/* Heart Icon */}
+                            <button
+                              onClick={(e) => toggleFavorite(e, track.id)}
+                              className={`p-1 hover:bg-white/10 rounded transition-all ${track.rating === 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                            >
+                              <svg className={`w-4 h-4 transition-colors ${track.rating === 1 ? 'text-app-accent fill-app-accent' : 'text-app-text-muted'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                              </svg>
+                            </button>
+                          </div>
+                        ))
+                      ) : (
+                        /* Credits View - Grouped by Role */
+                        <div className="space-y-6 px-4">
+                          {Object.keys(albumCredits).length > 0 ? (
+                            Object.entries(albumCredits)
+                              .filter(([role]) => role !== 'Lyricist') // Remove Lyricist as requested
+                              .map(([role, credits]) => (
+                                <div key={role} className="mb-6">
+                                  <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-3 border-b border-app-surface pb-2">
+                                    {role}
+                                  </h3>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
+                                    {(credits as any[]).map((credit, idx) => (
+                                      <button
+                                        key={idx}
+                                        onClick={() => {
+                                          if (credit.artist_mbid) {
+                                            // TODO: Open artist detail panel
+                                            console.log('Open artist:', credit.artist_mbid);
+                                          }
+                                          handleDeepLink(credit.name);
+                                        }}
+                                        className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-app-surface transition-colors text-left group"
+                                      >
+                                        <div className="w-8 h-8 rounded-full bg-app-surface flex items-center justify-center text-xs font-medium text-app-text-muted group-hover:bg-white/10 group-hover:text-white transition-colors border border-transparent group-hover:border-white/20">
+                                          {credit.name?.charAt(0).toUpperCase()}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <div className="font-medium text-app-text truncate group-hover:text-app-accent transition-colors">
+                                            {credit.name}
+                                          </div>
+                                          {credit.instrument && (
+                                            <div className="text-xs text-app-text-muted truncate">
+                                              {credit.instrument}
+                                            </div>
+                                          )}
+                                        </div>
+                                        {credit.artist_mbid && (
+                                          <svg className="w-4 h-4 text-app-text-muted opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                          </svg>
+                                        )}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))
+                          ) : (
+                            <div className="py-12 text-center">
+                              <div className="text-app-text-muted mb-4">No detailed credits available.</div>
+                            </div>
+                          )}
+
+                          {/* Always show Enrich button (or progress) at the bottom */}
+                          <div className="mt-8 pt-8 border-t border-app-surface flex flex-col items-center">
+                            {enrichmentStatus.isEnriching ? (
+                              <div className="w-full max-w-sm">
+                                <div className="flex justify-between text-xs text-app-text-muted mb-2">
+                                  <span>Enriching Library...</span>
+                                  <span>{enrichmentStatus.processed} / {enrichmentStatus.total}</span>
+                                </div>
+                                <div className="w-full h-1.5 bg-app-surface rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-white/80 shadow-[0_0_10px_rgba(255,255,255,0.3)] transition-all duration-300 ease-out"
+                                    style={{ width: `${(enrichmentStatus.processed / (enrichmentStatus.total || 1)) * 100}%` }}
+                                  />
+                                </div>
+                                {enrichmentStatus.currentTrack && (
+                                  <div className="text-xs text-app-text-muted mt-2 text-center truncate">
+                                    {enrichmentStatus.currentTrack}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      await axios.post(`${SERVER_URL}/api/enrich`);
+                                      // Status will update via polling
+                                    } catch (e) {
+                                      console.error("Enrichment failed:", e);
+                                    }
+                                  }}
+                                  className="px-4 py-2 bg-app-surface border border-white/5 hover:bg-white/10 hover:border-white/20 hover:text-white text-app-text-muted rounded-lg transition-colors text-sm flex items-center gap-2"
+                                >
+                                  <span>🎵</span>
+                                  <span>Enrich with MusicBrainz</span>
+                                </button>
+                                <p className="text-xs text-app-text-muted mt-2">Fetches producer, engineer, labels, and genre tags</p>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Album Footer Info - Copyright & Labels */}
+                      <div className="mt-12 pt-8 border-t border-app-surface/30 text-center">
+                        <div className="text-sm font-medium text-app-text-muted">
+                          © {selectedAlbum.year || ''} {albumMetadata?.label?.name || selectedAlbum.artist}
+                        </div>
+                        <div className="flex flex-col items-center gap-1 mt-2 text-xs text-app-text-muted/60 font-mono">
+                          {albumMetadata?.label?.name && (
+                            <span>Released by {albumMetadata.label.name}</span>
+                          )}
+                          {albumMetadata?.release?.country && (
+                            <span>{albumMetadata.release.country} Release</span>
+                          )}
+                          {albumMetadata?.release?.barcode && (
+                            <span className="opacity-50">UPC: {albumMetadata.release.barcode}</span>
+                          )}
+                        </div>
+                        <div className="mt-6 flex justify-center gap-4 opacity-40 grayscale hover:grayscale-0 transition-all duration-500">
+                          {/* Placeholder for label logos / copyright badges */}
+                          <Disc size={24} />
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
                 </div>
-              </div>
-            )}
+              )
+            }
 
             {/* Scan Overlay */}
-            {showScanOverlay && (
-              <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center flex-col gap-4">
-                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-app-accent"></div>
-                <h2 className="text-xl font-bold text-white">Indexing Library...</h2>
-                <p className="text-app-text-muted">Processed: {scanStatus.processedCount}</p>
-                <p className="text-xs text-app-text-muted max-w-md truncate">{scanStatus.currentFile}</p>
-              </div>
-            )}
+            {
+              showScanOverlay && (
+                <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center flex-col gap-4">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-app-accent"></div>
+                  <h2 className="text-xl font-bold text-white">Indexing Library...</h2>
+                  <p className="text-app-text-muted">Processed: {scanStatus.processedCount}</p>
+                  <p className="text-xs text-app-text-muted max-w-md truncate">{scanStatus.currentFile}</p>
+                </div>
+              )
+            }
 
             {/* Main Content */}
             <div className="flex-1 overflow-y-auto p-6 bg-app-bg">
@@ -1687,23 +1995,15 @@ function App() {
                       >
                         Artists
                       </button>
+                      <button
+                        onClick={() => setView('labels')}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${view === 'labels' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
+                      >
+                        Labels
+                      </button>
                     </div>
-                    <div className="flex items-center gap-4">
-                      {view === 'grid' && (
-                        <select
-                          value={albumSort}
-                          onChange={(e) => setAlbumSort(e.target.value)}
-                          className="bg-app-surface border border-white/10 rounded-lg px-3 py-1.5 text-sm text-app-text outline-none focus:border-app-accent"
-                        >
-                          <option value="artist">Sort by Artist</option>
-                          <option value="title">Sort by Title</option>
-                          <option value="year">Sort by Year</option>
-                          <option value="recent">Recently Added</option>
-                        </select>
-                      )}
-                      <div className="text-sm text-app-text-muted">
-                        {view === 'grid' ? `${albums.length} albums` : `${tracks.length} tracks`}
-                      </div>
+                    <div className="text-sm text-app-text-muted">
+                      {view === 'grid' || view === 'list' ? `${albums.length} albums` : view === 'artists' ? `${artists.length} artists` : `${allLabels.length} labels`}
                     </div>
                   </div>
 
@@ -1838,40 +2138,101 @@ function App() {
                     </div>
                   )}
 
+                  {/* Labels View */}
+                  {view === 'labels' && (
+                    <div className="pb-32">
+                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                        {allLabels.map(label => (
+                          <div
+                            key={label.id}
+                            className="bg-app-surface hover:bg-app-surface/80 rounded-xl p-4 cursor-pointer transition-colors group"
+                            onClick={async () => {
+                              try {
+                                const res = await axios.get(`${SERVER_URL}/api/labels/${label.id}`);
+                                setSelectedLabel(res.data);
+                              } catch (e) { console.error(e); }
+                            }}
+                          >
+                            <div className="aspect-square bg-gradient-to-br from-orange-600/30 to-red-600/30 rounded-lg mb-3 overflow-hidden shadow-lg">
+                              <div className="grid grid-cols-2 grid-rows-2 gap-0.5 w-full h-full p-0.5">
+                                {[0, 1, 2, 3].map(i => {
+                                  const previewAlbum = label.preview_albums?.[i];
+                                  return (
+                                    <div key={i} className="bg-app-bg/50 rounded-sm overflow-hidden aspect-square">
+                                      {previewAlbum?.sample_track_id ? (
+                                        <img
+                                          src={`${SERVER_URL}/api/art/${previewAlbum.sample_track_id}`}
+                                          alt=""
+                                          className="w-full h-full object-cover"
+                                        />
+                                      ) : (
+                                        <div className="w-full h-full flex items-center justify-center">
+                                          <Disc size={20} className="text-app-text-muted/50" />
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                            <div className="text-base font-bold text-app-text truncate">{label.name}</div>
+                            <div className="flex items-center justify-between mt-1">
+                              <span className="text-sm text-app-text-muted">{label.album_count || 0} albums</span>
+                              {label.country && (
+                                <span className="text-xs text-app-text-muted">{label.country}</span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {allLabels.length === 0 && (
+                        <div className="text-center py-16">
+                          <Disc size={64} className="mx-auto mb-4 text-app-text-muted opacity-50" />
+                          <h2 className="text-xl font-bold text-app-text mb-2">No labels found</h2>
+                          <p className="text-app-text-muted">Labels are auto-detected from your music metadata via MusicBrainz</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                 </>
               )}
             </div>
 
             {/* Equalizer Panel (Overlay) - Legacy UI, Now Playing has better EQ */}
-            {showEq && (
-              <div className="h-48 border-t border-app-surface bg-app-surface/50 backdrop-blur-md p-4 flex flex-col items-center animate-in slide-in-from-bottom">
-                <div className="w-full max-w-3xl flex justify-between items-end h-32 pb-4">
-                  {audioEngine.getBands().map((band, i) => (
-                    <div key={band.frequency} className="flex flex-col items-center gap-2 h-full justify-end w-8">
-                      <input
-                        type="range"
-                        min="-12" max="12" step="0.1"
-                        value={eqGains[i] || 0}
-                        onChange={(e) => handleEqChange(i, e.target.value)}
-                        className="h-24 -rotate-90 w-24 origin-center accent-app-accent cursor-pointer"
-                        style={{ appearance: 'slider-vertical' as any }}
-                      />
-                      <span className="text-[10px] text-app-text-muted">
-                        {band.frequency >= 1000 ? `${band.frequency / 1000}k` : band.frequency}
-                      </span>
-                    </div>
-                  ))}
+            {
+              showEq && (
+                <div className="h-48 border-t border-app-surface bg-app-surface/50 backdrop-blur-md p-4 flex flex-col items-center animate-in slide-in-from-bottom">
+                  <div className="w-full max-w-3xl flex justify-between items-end h-32 pb-4">
+                    {audioEngine.getBands().map((band, i) => (
+                      <div key={band.frequency} className="flex flex-col items-center gap-2 h-full justify-end w-8">
+                        <input
+                          type="range"
+                          min="-12" max="12" step="0.1"
+                          value={eqGains[i] || 0}
+                          onChange={(e) => handleEqChange(i, e.target.value)}
+                          className="h-24 -rotate-90 w-24 origin-center accent-app-accent cursor-pointer"
+                          style={{ appearance: 'slider-vertical' as any }}
+                        />
+                        <span className="text-[10px] text-app-text-muted">
+                          {band.frequency >= 1000 ? `${band.frequency / 1000}k` : band.frequency}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => setShowNowPlaying(true)}
+                    className="text-xs text-app-accent hover:text-app-accent/80 mt-2"
+                  >
+                    Open Full Parametric EQ →
+                  </button>
                 </div>
-                <button
-                  onClick={() => setShowNowPlaying(true)}
-                  className="text-xs text-app-accent hover:text-app-accent/80 mt-2"
-                >
-                  Open Full Parametric EQ →
-                </button>
-              </div>
-            )}
+              )
+            }
           </>
-        )}
+        )
+        }
 
         {/* HIDDEN DUAL DECKS - Moved outside conditional rendering for persistence */}
         <div style={{ display: 'none' }}>
@@ -1902,79 +2263,393 @@ function App() {
         </div>
 
         {/* Floating Player Dock - Always visible except when Now Playing is open */}
-        {!showNowPlaying && currentTrack && (
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[200] pointer-events-none">
-            <div className="pointer-events-auto bg-gray-900/80 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl px-6 py-4 flex items-center gap-8">
-              {/* Track Info */}
-              <div className="flex items-center gap-3">
-                <div
-                  onClick={() => setShowNowPlaying(true)}
-                  className="h-12 w-12 bg-black/20 rounded-lg flex items-center justify-center text-app-text-muted cursor-pointer hover:scale-105 transition-transform overflow-hidden"
-                >
-                  {currentTrack.has_art ? (
-                    <img src={`${SERVER_URL}/api/art/${currentTrack.id}`} alt="" className="w-full h-full object-cover" />
-                  ) : (
-                    <Disc size={20} />
-                  )}
-                </div>
-                <div className="max-w-[200px]">
-                  <div className="font-medium text-white text-sm truncate">{currentTrack.title}</div>
+        {
+          !showNowPlaying && currentTrack && (
+            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[200] pointer-events-none">
+              <div className="pointer-events-auto bg-gray-900/80 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl px-6 py-4 flex items-center gap-8">
+                {/* Track Info */}
+                <div className="flex items-center gap-3">
                   <div
-                    className="text-xs text-gray-400 truncate cursor-pointer hover:text-white transition-colors"
-                    onClick={() => {
-                      const artist = artists.find(a => a.name === currentTrack.artist);
-                      if (artist) setSelectedArtist(artist);
-                    }}
+                    onClick={() => setShowNowPlaying(true)}
+                    className="h-12 w-12 bg-black/20 rounded-lg flex items-center justify-center text-app-text-muted cursor-pointer hover:scale-105 transition-transform overflow-hidden"
                   >
-                    {currentTrack.artist}
+                    {currentTrack.has_art ? (
+                      <img src={`${SERVER_URL}/api/art/${currentTrack.id}`} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <Disc size={20} />
+                    )}
+                  </div>
+                  <div className="max-w-[200px]">
+                    <div className="font-medium text-white text-sm truncate">{currentTrack.title}</div>
+                    <div
+                      className="text-xs text-gray-400 truncate cursor-pointer hover:text-white transition-colors"
+                      onClick={() => {
+                        const artist = artists.find(a => a.name === currentTrack.artist);
+                        if (artist) setSelectedArtist(artist);
+                      }}
+                    >
+                      {currentTrack.artist}
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Controls (Center) */}
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={() => setShuffleMode(s => !s)}
-                  className={`transition-colors ${shuffleMode ? 'text-app-accent' : 'text-gray-400 hover:text-white'}`}
-                  title="Shuffle (S)"
-                >
-                  <Shuffle size={18} />
-                </button>
-                <button onClick={() => playTrack(currentTrackIndex - 1, 'cut')} className="text-gray-400 hover:text-white transition-colors"><SkipBack size={22} /></button>
-                <button
-                  onClick={togglePlay}
-                  className="h-12 w-12 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-lg"
-                >
-                  {isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" className="ml-0.5" />}
-                </button>
-                <button onClick={() => playTrack(currentTrackIndex + 1, 'crossfade')} className="text-gray-400 hover:text-white transition-colors"><SkipForward size={22} /></button>
-                <button
-                  onClick={() => setRepeatMode(r => r === 'off' ? 'all' : r === 'all' ? 'one' : 'off')}
-                  className={`transition-colors ${repeatMode !== 'off' ? 'text-app-accent' : 'text-gray-400 hover:text-white'}`}
-                  title="Repeat (R)"
-                >
-                  {repeatMode === 'one' ? <Repeat1 size={18} /> : <Repeat size={18} />}
-                </button>
-              </div>
+                {/* Controls (Center) */}
+                <div className="flex items-center gap-4">
+                  <button
+                    onClick={() => setShuffleMode(s => !s)}
+                    className={`transition-colors ${shuffleMode ? 'text-app-accent' : 'text-gray-400 hover:text-white'}`}
+                    title="Shuffle (S)"
+                  >
+                    <Shuffle size={18} />
+                  </button>
+                  <button onClick={() => playTrack(currentTrackIndex - 1, 'cut')} className="text-gray-400 hover:text-white transition-colors"><SkipBack size={22} /></button>
+                  <button
+                    onClick={togglePlay}
+                    className="h-12 w-12 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-lg"
+                  >
+                    {isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" className="ml-0.5" />}
+                  </button>
+                  <button onClick={() => playTrack(currentTrackIndex + 1, 'crossfade')} className="text-gray-400 hover:text-white transition-colors"><SkipForward size={22} /></button>
+                  <button
+                    onClick={() => setRepeatMode(r => r === 'off' ? 'all' : r === 'all' ? 'one' : 'off')}
+                    className={`transition-colors ${repeatMode !== 'off' ? 'text-app-accent' : 'text-gray-400 hover:text-white'}`}
+                    title="Repeat (R)"
+                  >
+                    {repeatMode === 'one' ? <Repeat1 size={18} /> : <Repeat size={18} />}
+                  </button>
+                </div>
 
-              {/* Volume Control */}
-              <div className="flex items-center gap-2">
-                <Volume2 size={18} className="text-gray-400" />
-                <input
-                  type="range" min="0" max="1" step="0.01"
-                  value={volume}
-                  onChange={(e) => {
-                    const newVolume = parseFloat(e.target.value);
-                    setVolume(newVolume);
-                    if (activeDeck === 'A' && audioRefA.current) audioRefA.current.volume = newVolume;
-                    if (activeDeck === 'B' && audioRefB.current) audioRefB.current.volume = newVolume;
-                  }}
-                  className="w-20 accent-app-accent h-1 bg-white/20 rounded-lg appearance-none cursor-pointer"
-                />
+                {/* Volume Control */}
+                <div className="flex items-center gap-2">
+                  <Volume2 size={18} className="text-gray-400" />
+                  <input
+                    type="range" min="0" max="1" step="0.01"
+                    value={volume}
+                    onChange={(e) => {
+                      const newVolume = parseFloat(e.target.value);
+                      setVolume(newVolume);
+                      if (activeDeck === 'A' && audioRefA.current) audioRefA.current.volume = newVolume;
+                      if (activeDeck === 'B' && audioRefB.current) audioRefB.current.volume = newVolume;
+                    }}
+                    className="w-20 accent-app-accent h-1 bg-white/20 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
+              </div>
+            </div>
+          )
+        }
+
+
+        {/* Collection Detail View Overlay */}
+        {selectedCollection && (
+          <div
+            className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm overflow-y-auto"
+            onClick={() => setSelectedCollection(null)}
+          >
+            <div className="min-h-screen p-8" onClick={e => e.stopPropagation()}>
+              <div className="max-w-6xl mx-auto">
+                <div className="flex items-center justify-between mb-8">
+                  <div>
+                    <button
+                      onClick={() => setSelectedCollection(null)}
+                      className="text-app-text-muted hover:text-white mb-4 flex items-center gap-2"
+                    >
+                      <X size={20} /> Close
+                    </button>
+                    <h1 className="text-3xl font-bold text-white">{selectedCollection.name}</h1>
+                    <p className="text-app-text-muted mt-1">{selectedCollection.description}</p>
+                    <p className="text-sm text-app-text-muted mt-2">{selectedCollection.albums?.length || 0} albums</p>
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => {
+                        // Shuffle collection
+                        if (selectedCollection.albums?.length) {
+                          const randomAlbum = selectedCollection.albums[Math.floor(Math.random() * selectedCollection.albums.length)];
+                          const albumTracks = tracks.filter(t => t.album === randomAlbum.album_name); // Simplified lookup
+                          if (albumTracks.length) {
+                            const idx = tracks.findIndex(t => t.id === albumTracks[0].id);
+                            if (idx !== -1) playTrack(idx, 'cut');
+                          }
+                        }
+                      }}
+                      className="px-6 py-2.5 bg-app-accent hover:bg-app-accent/80 rounded-full text-white font-medium flex items-center gap-2"
+                    >
+                      <Shuffle size={18} /> Shuffle
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (confirm('Delete this collection?')) {
+                          await axios.delete(`${SERVER_URL}/api/collections/${selectedCollection.id}`);
+                          refreshPlaylists();
+                          setSelectedCollection(null);
+                        }
+                      }}
+                      className="px-6 py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-full font-medium"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                  {selectedCollection.albums?.map((album: any) => (
+                    <div
+                      key={album.id}
+                      className="group relative bg-app-surface rounded-xl p-4 cursor-pointer"
+                      onClick={() => {
+                        const albumData = albums.find(a => a.name === album.album_name);
+                        if (albumData) {
+                          setSelectedAlbum(albumData);
+                          setSelectedCollection(null);
+                        }
+                      }}
+                    >
+                      {/* Remove button */}
+                      <div
+                        className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            await axios.delete(`${SERVER_URL}/api/collections/${selectedCollection.id}/albums/${album.album_name}`);
+                            // Refresh local state
+                            const res = await axios.get(`${SERVER_URL}/api/collections`);
+                            setAllCollections(res.data);
+                            const updated = res.data.find((c: any) => c.id === selectedCollection.id);
+                            setSelectedCollection(updated);
+                          } catch (err) { console.error(err); }
+                        }}
+                      >
+                        <button className="p-1.5 bg-black/50 hover:bg-red-500 rounded-full text-white">
+                          <X size={14} />
+                        </button>
+                      </div>
+
+                      <div className="aspect-square bg-app-bg rounded-lg mb-3 overflow-hidden shadow-lg">
+                        {album.sample_track_id ? (
+                          <img src={`${SERVER_URL}/api/art/${album.sample_track_id}`} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center"><Disc size={48} className="text-app-text-muted" /></div>
+                        )}
+                      </div>
+                      <div className="font-bold text-app-text truncate">{album.album_name}</div>
+                      <div className="text-sm text-app-text-muted truncate">{album.artist_name}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
         )}
+
+        {/* Add to Collection Modal */}
+        {addToCollectionAlbum && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <div className="bg-app-surface w-[500px] rounded-2xl p-6 shadow-2xl border border-white/10">
+              <h2 className="text-xl font-bold text-white mb-4">
+                {addToCollectionAlbum.name ? `Add "${addToCollectionAlbum.name}" to Collection` : 'Create New Collection'}
+              </h2>
+              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+                <button
+                  onClick={() => {
+                    // Logic to create new collection
+                    const name = prompt('Collection Name:');
+                    if (name) {
+                      axios.post(`${SERVER_URL}/api/collections`, {
+                        name,
+                        description: '',
+                        // Only add album if we have one
+                        initialAlbum: addToCollectionAlbum.name ? addToCollectionAlbum : undefined
+                      }).then(() => {
+                        refreshPlaylists();
+                        setAddToCollectionAlbum(null);
+                      });
+                    }
+                  }}
+                  className="w-full p-4 rounded-xl border-2 border-dashed border-white/10 hover:border-app-accent hover:bg-white/5 flex items-center gap-3 transition-colors text-left"
+                >
+                  <div className="w-10 h-10 rounded-full bg-app-accent/20 flex items-center justify-center text-app-accent">
+                    <Plus size={20} />
+                  </div>
+                  <div>
+                    <div className="font-bold text-white">Create New Collection</div>
+                    <div className="text-sm text-app-text-muted">Start a new collection</div>
+                  </div>
+                </button>
+
+                {allCollections.map(col => (
+                  <button
+                    key={col.id}
+                    onClick={async () => {
+                      if (addToCollectionAlbum.name) {
+                        await axios.post(`${SERVER_URL}/api/collections/${col.id}/albums`, {
+                          albumName: addToCollectionAlbum.name,
+                          artistName: addToCollectionAlbum.artist
+                        });
+                        refreshPlaylists();
+                      }
+                      setAddToCollectionAlbum(null);
+                    }}
+                    className="w-full p-3 rounded-xl hover:bg-white/5 flex items-center gap-3 transition-colors text-left group"
+                  >
+                    <div className="w-12 h-12 rounded-lg bg-white/5 flex items-center justify-center overflow-hidden">
+                      {col.preview_albums?.[0]?.sample_track_id ? (
+                        <img src={`${SERVER_URL}/api/art/${col.preview_albums[0].sample_track_id}`} className="w-full h-full object-cover" />
+                      ) : <ListMusic size={20} className="text-app-text-muted" />}
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-bold text-app-text group-hover:text-white transition-colors">{col.name}</div>
+                      <div className="text-sm text-app-text-muted">{col.album_count || 0} albums</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-6 flex justify-end">
+                <button onClick={() => setAddToCollectionAlbum(null)} className="px-4 py-2 hover:bg-white/10 rounded-lg text-app-text-muted hover:text-white">Cancel</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Playlist Modal (Create/Edit) */}
+        {showPlaylistModal && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <div className="bg-app-surface w-[400px] rounded-2xl p-6 shadow-2xl border border-white/10">
+              <h2 className="text-xl font-bold text-white mb-6">Create Playlist</h2>
+              <form onSubmit={async (e) => {
+                e.preventDefault();
+                const formData = new FormData(e.currentTarget);
+                const name = formData.get('name') as string;
+                const desc = formData.get('description') as string;
+                if (name) {
+                  await axios.post(`${SERVER_URL}/api/playlists`, { name, description: desc });
+                  refreshPlaylists();
+                  setShowPlaylistModal(false);
+                }
+              }}>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-app-text-muted uppercase tracking-wider mb-2">Name</label>
+                    <input name="name" autoFocus className="w-full bg-app-bg border border-white/10 rounded-lg px-4 py-2 text-white focus:border-app-accent outline-none" placeholder="My Playlist" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-app-text-muted uppercase tracking-wider mb-2">Description</label>
+                    <textarea name="description" className="w-full bg-app-bg border border-white/10 rounded-lg px-4 py-2 text-white focus:border-app-accent outline-none h-24 resize-none" placeholder="Optional description..." />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 mt-8">
+                  <button type="button" onClick={() => setShowPlaylistModal(false)} className="px-4 py-2 hover:bg-white/10 rounded-lg text-app-text-muted hover:text-white">Cancel</button>
+                  <button type="submit" className="px-6 py-2 bg-app-accent hover:bg-app-accent/80 rounded-lg text-white font-medium">Create</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Label Detail View Overlay */}
+        {
+          selectedLabel && (
+            <div
+              className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm overflow-y-auto"
+              onClick={() => setSelectedLabel(null)}
+            >
+              <div
+                className="min-h-screen p-8"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="max-w-6xl mx-auto">
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-8">
+                    <div>
+                      <button
+                        onClick={() => setSelectedLabel(null)}
+                        className="text-app-text-muted hover:text-white mb-4 flex items-center gap-2"
+                      >
+                        <X size={20} />
+                        Close
+                      </button>
+                      <h1 className="text-3xl font-bold text-white">{selectedLabel.name}</h1>
+                      <p className="text-app-text-muted mt-1">
+                        {selectedLabel.type || 'Record Label'}
+                        {selectedLabel.country && ` • ${selectedLabel.country}`}
+                        {selectedLabel.founded && ` • Founded ${selectedLabel.founded}`}
+                      </p>
+                      <p className="text-sm text-app-text-muted mt-2">
+                        {selectedLabel.albums?.length || 0} albums
+                      </p>
+                    </div>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => {
+                          // Shuffle play all albums from this label
+                          if (selectedLabel.albums?.length > 0) {
+                            const randomAlbum = selectedLabel.albums[Math.floor(Math.random() * selectedLabel.albums.length)];
+                            const albumTracks = tracks.filter(t =>
+                              t.album === randomAlbum.album_name
+                            );
+                            if (albumTracks.length > 0) {
+                              const idx = tracks.findIndex(t => t.id === albumTracks[0].id);
+                              if (idx !== -1) playTrack(idx, 'cut');
+                            }
+                          }
+                        }}
+                        className="px-6 py-2.5 bg-app-accent hover:bg-app-accent/80 rounded-full text-white font-medium flex items-center gap-2"
+                      >
+                        <Shuffle size={18} />
+                        Shuffle
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Albums Grid */}
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                    {selectedLabel.albums?.map((album: any) => (
+                      <div
+                        key={album.id}
+                        className="bg-app-surface hover:bg-app-surface/80 rounded-xl p-4 cursor-pointer transition-colors group"
+                        onClick={() => {
+                          // Open this album in the album detail view
+                          const albumData = albums.find(a => a.name === album.album_name);
+                          if (albumData) {
+                            setSelectedAlbum(albumData);
+                            setSelectedLabel(null);
+                          }
+                        }}
+                      >
+                        <div className="aspect-square bg-app-bg rounded-lg mb-3 overflow-hidden shadow-lg">
+                          {album.sample_track_id ? (
+                            <img
+                              src={`${SERVER_URL}/api/art/${album.sample_track_id}`}
+                              alt=""
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <Disc size={48} className="text-app-text-muted" />
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-base font-bold text-app-text truncate">{album.album_name}</div>
+                        <div className="text-sm text-app-text-muted truncate">{album.artist_name}</div>
+                        {album.release_date && (
+                          <div className="text-xs text-app-text-muted mt-1">{album.release_date.substring(0, 4)}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {(!selectedLabel.albums || selectedLabel.albums.length === 0) && (
+                    <div className="text-center py-16">
+                      <Disc size={64} className="mx-auto mb-4 text-app-text-muted opacity-50" />
+                      <h2 className="text-xl font-bold text-app-text mb-2">No albums found for this label</h2>
+                      <p className="text-app-text-muted">Albums are linked via MusicBrainz metadata</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )
+        }
 
         {/* Now Playing Full-Screen View */}
         <NowPlaying
@@ -2035,8 +2710,8 @@ function App() {
             }
           }}
         />
-      </div>
-    </div>
+      </div >
+    </div >
   );
 }
 

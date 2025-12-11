@@ -305,7 +305,7 @@ export function NowPlaying({
                     <div className="w-full max-w-md mb-6">
                         <div className="relative h-1 bg-gray-700 rounded-full overflow-hidden group">
                             <div
-                                className="absolute h-full bg-white rounded-full transition-all"
+                                className="absolute h-full bg-white rounded-full transition-all shadow-[0_0_10px_rgba(255,255,255,0.7),0_0_20px_rgba(255,255,255,0.4)]"
                                 style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
                             />
                             <input

@@ -230,6 +230,46 @@ db.exec(`CREATE INDEX IF NOT EXISTS idx_history_played_at ON listening_history(p
 // Add added_at column to tracks
 addColumn('tracks', 'added_at', 'TEXT');
 
+// Enhanced playlist columns for smart playlists
+addColumn('playlists', 'type', 'TEXT'); // 'manual', 'smart', 'auto'
+addColumn('playlists', 'rules', 'TEXT'); // JSON rules for smart playlists
+addColumn('playlists', 'pinned_to_home', 'INTEGER'); // Show on homepage
+addColumn('playlists', 'cover_art_path', 'TEXT'); // Custom cover image
+
+// Index for homepage playlists
+try {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_playlists_pinned ON playlists(pinned_to_home)`);
+} catch (e) { /* Index exists */ }
+
+// Album Collections table
+db.exec(`
+  CREATE TABLE IF NOT EXISTS album_collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    pinned_to_home INTEGER DEFAULT 0,
+    cover_art_path TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+// Junction table for albums in collections
+db.exec(`
+  CREATE TABLE IF NOT EXISTS collection_albums (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_id INTEGER NOT NULL,
+    album_name TEXT NOT NULL,
+    artist_name TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (collection_id) REFERENCES album_collections(id) ON DELETE CASCADE,
+    UNIQUE(collection_id, album_name, artist_name)
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_collection_albums_collection ON collection_albums(collection_id)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_collections_pinned ON album_collections(pinned_to_home)`);
+
 // Export typed database instance
 export default db;
 
