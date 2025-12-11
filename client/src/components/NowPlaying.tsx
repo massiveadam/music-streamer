@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import {
     X, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1,
-    Volume2, VolumeX, Heart, ListMusic, Sliders, ChevronDown, Disc
+    Volume2, VolumeX, Heart, ListMusic, Sliders, ChevronDown, Disc,
+    Upload, Plus
 } from 'lucide-react';
 import { audioEngine, EQBand, BUILT_IN_PRESETS, EQPreset, FilterType } from '../audio/AudioEngine';
 import { Track } from '../types';
@@ -27,6 +28,8 @@ interface NowPlayingProps {
     serverUrl: string;
     queue: Track[];
     onArtistClick: (artistName: string) => void;
+    onAlbumClick: (albumName: string, artistName: string) => void;
+    accentColor?: string; // Dynamic color from album art
 }
 
 export function NowPlaying({
@@ -49,7 +52,9 @@ export function NowPlaying({
     onFavorite,
     serverUrl,
     queue,
-    onArtistClick
+    onArtistClick,
+    onAlbumClick,
+    accentColor = '#333333'
 }: NowPlayingProps) {
     const [showEq, setShowEq] = useState(false);
     const [eqBands, setEqBands] = useState<EQBand[]>(audioEngine.getBands());
@@ -60,6 +65,23 @@ export function NowPlaying({
     const [showQueue, setShowQueue] = useState(false);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const text = e.target?.result as string;
+            audioEngine.importFromText(text);
+            setCurrentPreset('Custom');
+        };
+        reader.readAsText(file);
+
+        // Reset input so same file can be selected again if needed
+        event.target.value = '';
+    };
 
     // Subscribe to audio engine changes
     useEffect(() => {
@@ -135,8 +157,12 @@ export function NowPlaying({
         });
 
         // Draw frequency response curve
+        // Use dynamic tint for canvas
+        const computedStyle = getComputedStyle(document.documentElement);
+        const accentColor = computedStyle.getPropertyValue('--app-accent').trim() || '#ffffff';
+
         ctx.beginPath();
-        ctx.strokeStyle = '#8b5cf6'; // Purple
+        ctx.strokeStyle = accentColor;
         ctx.lineWidth = 2;
 
         for (let i = 0; i < numPoints; i++) {
@@ -155,7 +181,13 @@ export function NowPlaying({
         ctx.lineTo(width, height / 2);
         ctx.lineTo(0, height / 2);
         ctx.closePath();
-        ctx.fillStyle = 'rgba(139, 92, 246, 0.2)';
+        ctx.closePath();
+        // Tinted fill
+        const hex = accentColor.replace('#', '');
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.2)`;
         ctx.fill();
 
         // Draw band markers
@@ -166,7 +198,7 @@ export function NowPlaying({
 
             ctx.beginPath();
             ctx.arc(x, y, 6, 0, Math.PI * 2);
-            ctx.fillStyle = band.gain !== 0 ? '#8b5cf6' : '#4b5563';
+            ctx.fillStyle = band.gain !== 0 ? accentColor : '#666666';
             ctx.fill();
             ctx.strokeStyle = '#fff';
             ctx.lineWidth = 1.5;
@@ -204,27 +236,36 @@ export function NowPlaying({
     if (!isOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 bg-gradient-to-b from-gray-900 via-black to-black flex flex-col">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4">
-                <button
-                    onClick={onClose}
-                    className="p-2 hover:bg-white/10 rounded-full transition-colors"
-                >
-                    <ChevronDown size={24} className="text-white" />
-                </button>
-                <div className="text-sm text-gray-400 font-medium">Now Playing</div>
-                <button
-                    onClick={() => setShowQueue(!showQueue)}
-                    className={`p-2 rounded-full transition-colors ${showQueue ? 'bg-purple-500/20 text-purple-400' : 'hover:bg-white/10 text-white'}`}
-                >
-                    <ListMusic size={20} />
-                </button>
-            </div>
+        <div className="fixed inset-0 z-[300] bg-black flex">
+            {/* Dynamic Background Gradient - using inline style with accentColor prop */}
+            <div
+                className="absolute inset-0 pointer-events-none"
+                style={{
+                    background: `linear-gradient(to bottom, ${accentColor}80 0%, #000000 50%, #000000 100%)`
+                }}
+            />
 
-            <div className="flex-1 flex overflow-hidden">
+            {/* Left Side - Header + Main Content */}
+            <div className={`flex flex-col relative z-10 transition-all ${showQueue || showEq ? 'w-1/2' : 'w-full'}`}>
+                {/* Header */}
+                <div className="flex items-center justify-between px-6 py-4">
+                    <button
+                        onClick={onClose}
+                        className="p-2 hover:bg-white/10 rounded-full transition-colors"
+                    >
+                        <ChevronDown size={24} className="text-white" />
+                    </button>
+                    <div className="text-sm text-gray-400 font-medium">Now Playing</div>
+                    <button
+                        onClick={() => setShowQueue(!showQueue)}
+                        className={`p-2 rounded-full transition-colors border ${showQueue ? 'bg-white/20 border-white/30 text-white' : 'border-transparent hover:bg-white/10 text-white/60 hover:text-white'}`}
+                    >
+                        <ListMusic size={20} />
+                    </button>
+                </div>
+
                 {/* Main Content */}
-                <div className={`flex-1 flex flex-col items-center justify-center px-8 transition-all ${showQueue || showEq ? 'w-1/2' : 'w-full'}`}>
+                <div className="flex-1 flex flex-col items-center justify-center px-8 overflow-hidden">
                     {/* Album Artwork */}
                     <div className="w-full max-w-md aspect-square rounded-lg overflow-hidden shadow-2xl mb-8">
                         {currentTrack?.has_art ? (
@@ -251,9 +292,12 @@ export function NowPlaying({
                         >
                             {currentTrack?.artist || '—'}
                         </p>
-                        <p className="text-sm text-gray-500 truncate mt-1">
-                            {currentTrack?.album || ''}
-                            {currentTrack?.year && ` • ${currentTrack.year}`}
+                        <p
+                            className="text-sm text-gray-500 truncate mt-1 cursor-pointer hover:text-gray-300 transition-colors"
+                            onClick={() => currentTrack && onAlbumClick(currentTrack.album, currentTrack.artist)}
+                        >
+                            <span>{currentTrack?.album || ''}</span>
+                            {currentTrack?.year && <span className="text-gray-600"> • {currentTrack.year}</span>}
                         </p>
                     </div>
 
@@ -283,7 +327,7 @@ export function NowPlaying({
                     <div className="flex items-center gap-8 mb-8">
                         <button
                             onClick={onToggleShuffle}
-                            className={`p-2 transition-colors ${shuffleMode ? 'text-purple-400' : 'text-gray-400 hover:text-white'}`}
+                            className={`p-2 transition-colors relative ${shuffleMode ? 'text-app-accent after:absolute after:bottom-0 after:left-1/2 after:-translate-x-1/2 after:w-1 after:h-1 after:bg-app-accent after:rounded-full' : 'text-white/40 hover:text-white'}`}
                         >
                             <Shuffle size={20} />
                         </button>
@@ -301,7 +345,7 @@ export function NowPlaying({
                         </button>
                         <button
                             onClick={onToggleRepeat}
-                            className={`p-2 transition-colors ${repeatMode !== 'off' ? 'text-purple-400' : 'text-gray-400 hover:text-white'}`}
+                            className={`p-2 transition-colors relative ${repeatMode !== 'off' ? 'text-app-accent after:absolute after:bottom-0 after:left-1/2 after:-translate-x-1/2 after:w-1 after:h-1 after:bg-app-accent after:rounded-full' : 'text-white/40 hover:text-white'}`}
                         >
                             {repeatMode === 'one' ? <Repeat1 size={20} /> : <Repeat size={20} />}
                         </button>
@@ -336,7 +380,7 @@ export function NowPlaying({
 
                         <button
                             onClick={() => setShowEq(!showEq)}
-                            className={`p-2 rounded-lg transition-colors ${showEq ? 'bg-purple-500/20 text-purple-400' : 'text-gray-400 hover:text-white'}`}
+                            className={`p-2 rounded-lg transition-colors border ${showEq ? 'bg-app-accent/20 border-app-accent/50 text-white' : 'border-transparent text-white/40 hover:text-white'}`}
                         >
                             <Sliders size={20} />
                         </button>
@@ -352,237 +396,343 @@ export function NowPlaying({
                         </div>
                     )}
                 </div>
+            </div>
 
-                {/* EQ Panel */}
-                {showEq && (
-                    <div className="w-1/2 border-l border-gray-800 p-6 overflow-y-auto">
-                        <div className="flex items-center justify-between mb-6">
-                            <h2 className="text-lg font-semibold text-white">Parametric EQ</h2>
+            {/* EQ Panel - Full height sidebar */}
+            {showEq && (
+                <div className="w-1/2 border-l border-white/10 p-6 pt-4 overflow-y-auto bg-black/60 backdrop-blur-md relative z-10">
+                    <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-lg font-semibold text-white">Parametric EQ</h2>
+                        <button
+                            onClick={() => setShowEq(false)}
+                            className="p-1 hover:bg-white/10 rounded-full"
+                        >
+                            <X size={18} className="text-gray-400" />
+                        </button>
+                    </div>
+
+                    {/* Presets */}
+                    <div className="mb-6">
+                        <label className="text-xs text-gray-500 uppercase tracking-wider mb-2 block">Preset</label>
+                        <div className="flex flex-wrap gap-2">
+                            {BUILT_IN_PRESETS.map(preset => (
+                                <button
+                                    key={preset.name}
+                                    onClick={() => handlePresetChange(preset.name)}
+                                    className={`px-3 py-1.5 rounded-full text-sm transition-colors border ${currentPreset === preset.name
+                                        ? 'bg-white text-black border-white font-medium'
+                                        : 'bg-transparent border-white/20 text-white/70 hover:border-white/50 hover:text-white'
+                                        }`}
+                                >
+                                    {preset.name}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Device Profiles */}
+                    <div className="mb-6">
+                        <div className="flex items-center justify-between mb-2">
+                            <label className="text-xs text-gray-500 uppercase tracking-wider">Device Profile</label>
                             <button
-                                onClick={() => setShowEq(false)}
-                                className="p-1 hover:bg-white/10 rounded-full"
+                                onClick={handleSaveProfile}
+                                className="text-xs text-app-accent hover:opacity-80"
                             >
-                                <X size={18} className="text-gray-400" />
+                                Save Current
                             </button>
                         </div>
-
-                        {/* Presets */}
-                        <div className="mb-6">
-                            <label className="text-xs text-gray-500 uppercase tracking-wider mb-2 block">Preset</label>
-                            <div className="flex flex-wrap gap-2">
-                                {BUILT_IN_PRESETS.map(preset => (
+                        <div className="flex flex-wrap gap-2">
+                            {deviceProfiles.length === 0 ? (
+                                <span className="text-sm text-gray-500">No saved profiles</span>
+                            ) : (
+                                deviceProfiles.map(name => (
                                     <button
-                                        key={preset.name}
-                                        onClick={() => handlePresetChange(preset.name)}
-                                        className={`px-3 py-1.5 rounded-full text-sm transition-colors ${currentPreset === preset.name
-                                                ? 'bg-purple-500 text-white'
-                                                : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                                        key={name}
+                                        onClick={() => handleLoadProfile(name)}
+                                        className={`px-3 py-1.5 rounded-full text-sm transition-colors border ${currentDevice === name
+                                            ? 'bg-white text-black border-white font-medium'
+                                            : 'bg-transparent border-white/20 text-white/70 hover:border-white/50'
                                             }`}
                                     >
-                                        {preset.name}
+                                        {name}
                                     </button>
-                                ))}
-                            </div>
+                                ))
+                            )}
                         </div>
+                    </div>
 
-                        {/* Device Profiles */}
-                        <div className="mb-6">
-                            <div className="flex items-center justify-between mb-2">
-                                <label className="text-xs text-gray-500 uppercase tracking-wider">Device Profile</label>
-                                <button
-                                    onClick={handleSaveProfile}
-                                    className="text-xs text-purple-400 hover:text-purple-300"
-                                >
-                                    Save Current
-                                </button>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                                {deviceProfiles.length === 0 ? (
-                                    <span className="text-sm text-gray-500">No saved profiles</span>
-                                ) : (
-                                    deviceProfiles.map(name => (
-                                        <button
-                                            key={name}
-                                            onClick={() => handleLoadProfile(name)}
-                                            className={`px-3 py-1.5 rounded-full text-sm transition-colors ${currentDevice === name
-                                                    ? 'bg-green-600 text-white'
-                                                    : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                                                }`}
-                                        >
-                                            {name}
-                                        </button>
-                                    ))
-                                )}
-                            </div>
+                    {/* Frequency Response Curve */}
+                    <div className="mb-6">
+                        <canvas
+                            ref={canvasRef}
+                            width={400}
+                            height={150}
+                            className="w-full rounded-lg"
+                        />
+                    </div>
+
+                    {/* Preamp */}
+                    <div className="mb-6">
+                        <div className="flex items-center justify-between mb-2">
+                            <label className="text-xs text-gray-500 uppercase tracking-wider">Preamp</label>
+                            <span className="text-sm text-gray-400">{preamp > 0 ? '+' : ''}{preamp.toFixed(1)} dB</span>
                         </div>
+                        <input
+                            type="range"
+                            min="-12"
+                            max="12"
+                            step="0.5"
+                            value={preamp}
+                            onChange={(e) => {
+                                audioEngine.setPreamp(parseFloat(e.target.value));
+                                setCurrentPreset('Custom');
+                            }}
+                            className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-app-accent"
+                        />
+                    </div>
 
-                        {/* Frequency Response Curve */}
-                        <div className="mb-6">
-                            <canvas
-                                ref={canvasRef}
-                                width={400}
-                                height={150}
-                                className="w-full rounded-lg"
-                            />
-                        </div>
+                    {/* EQ Controls Header */}
+                    <div className="flex gap-2 mb-4">
+                        <input
+                            type="file"
+                            ref={fileInputRef}
+                            onChange={handleImport}
+                            className="hidden"
+                            accept=".txt"
+                        />
+                        <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="flex-1 py-2 bg-transparent border border-white/20 text-white/70 hover:bg-white/10 hover:border-white/40 rounded-lg text-sm transition-colors flex items-center justify-center gap-2"
+                        >
+                            <Upload size={16} />
+                            Import EQ
+                        </button>
+                        <button
+                            onClick={() => {
+                                audioEngine.addBand();
+                                setCurrentPreset('Custom');
+                            }}
+                            disabled={eqBands.length >= 10}
+                            className="flex-1 py-2 bg-transparent border border-white/20 text-white hover:bg-white/10 hover:border-white/40 disabled:border-white/10 disabled:text-white/30 rounded-lg text-sm transition-colors flex items-center justify-center gap-2 font-medium"
+                        >
+                            <Plus size={16} />
+                            Add Filter ({eqBands.length}/10)
+                        </button>
+                    </div>
 
-                        {/* Preamp */}
-                        <div className="mb-6">
-                            <div className="flex items-center justify-between mb-2">
-                                <label className="text-xs text-gray-500 uppercase tracking-wider">Preamp</label>
-                                <span className="text-sm text-gray-400">{preamp > 0 ? '+' : ''}{preamp.toFixed(1)} dB</span>
+                    {/* EQ Bands List */}
+                    <div className="space-y-4">
+                        {eqBands.length === 0 ? (
+                            <div className="text-center py-8 text-white/40 text-sm">
+                                No filters active. Add a filter or import a preset.
                             </div>
-                            <input
-                                type="range"
-                                min="-12"
-                                max="12"
-                                step="0.5"
-                                value={preamp}
-                                onChange={(e) => {
-                                    audioEngine.setPreamp(parseFloat(e.target.value));
-                                    setCurrentPreset('Custom');
-                                }}
-                                className="w-full accent-purple-500 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                            />
-                        </div>
+                        ) : eqBands.map((band, i) => (
+                            <div key={i} className="bg-white/5 rounded-lg p-3 border border-white/10">
+                                {/* Header: Type and Delete */}
+                                <div className="flex items-center gap-3 mb-3">
+                                    <button
+                                        onClick={() => {
+                                            audioEngine.setBandEnabled(i, !band.enabled);
+                                            setCurrentPreset('Custom');
+                                        }}
+                                        className={`w-4 h-4 rounded-full border-2 transition-colors ${band.enabled ? 'bg-app-accent border-app-accent' : 'border-gray-500'}`}
+                                        title={band.enabled ? "Disable Band" : "Enable Band"}
+                                    />
 
-                        {/* EQ Bands */}
-                        <div className="space-y-4">
-                            {eqBands.map((band, i) => (
-                                <div key={i} className="bg-gray-800/50 rounded-lg p-4">
-                                    <div className="flex items-center justify-between mb-3">
-                                        <div className="flex items-center gap-3">
-                                            <button
-                                                onClick={() => {
-                                                    audioEngine.setBandEnabled(i, !band.enabled);
-                                                    setCurrentPreset('Custom');
-                                                }}
-                                                className={`w-4 h-4 rounded-full border-2 transition-colors ${band.enabled ? 'bg-purple-500 border-purple-500' : 'border-gray-500'
-                                                    }`}
-                                            />
-                                            <span className="text-sm font-medium text-white">
-                                                {band.frequency >= 1000 ? `${(band.frequency / 1000).toFixed(1)}k` : band.frequency} Hz
-                                            </span>
-                                        </div>
-                                        <span className={`text-sm ${band.gain > 0 ? 'text-green-400' : band.gain < 0 ? 'text-red-400' : 'text-gray-400'}`}>
-                                            {band.gain > 0 ? '+' : ''}{band.gain.toFixed(1)} dB
-                                        </span>
+                                    <select
+                                        value={band.type}
+                                        onChange={(e) => {
+                                            audioEngine.setBandType(i, e.target.value as FilterType);
+                                            setCurrentPreset('Custom');
+                                        }}
+                                        className="bg-black/50 border border-white/20 text-white text-xs rounded px-2 py-1 flex-1"
+                                    >
+                                        <option value="peaking">Peak</option>
+                                        <option value="lowshelf">LSQ</option>
+                                        <option value="highshelf">HSQ</option>
+                                    </select>
+
+                                    <button
+                                        onClick={() => {
+                                            audioEngine.removeBand(i);
+                                            setCurrentPreset('Custom');
+                                        }}
+                                        className="text-gray-500 hover:text-red-400 p-1"
+                                        title="Remove Band"
+                                    >
+                                        <X size={14} />
+                                    </button>
+                                </div>
+
+                                {/* Edit Grid */}
+                                <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-3 items-center">
+
+                                    {/* Frequency */}
+                                    <div className="text-xs text-gray-400 font-mono w-12">Hz</div>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="number"
+                                            value={band.frequency}
+                                            onChange={(e) => {
+                                                audioEngine.setBandFrequency(i, parseFloat(e.target.value) || 1000);
+                                                setCurrentPreset('Custom');
+                                            }}
+                                            className="w-16 bg-black/50 border border-white/20 rounded px-1 py-0.5 text-xs text-right text-white"
+                                        />
+                                        <input
+                                            type="range"
+                                            min="20"
+                                            max="20000"
+                                            step="1"
+                                            value={band.frequency}
+                                            onChange={(e) => {
+                                                audioEngine.setBandFrequency(i, parseFloat(e.target.value));
+                                                setCurrentPreset('Custom');
+                                            }}
+                                            onDoubleClick={() => {
+                                                audioEngine.setBandFrequency(i, 1000);
+                                                setCurrentPreset('Custom');
+                                            }}
+                                            className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
+                                        />
                                     </div>
 
-                                    {/* Gain Slider */}
-                                    <div className="mb-3">
+                                    {/* Gain */}
+                                    <div className="text-xs text-gray-400 font-mono">dB</div>
+                                    <div className="flex items-center gap-2">
                                         <input
                                             type="range"
                                             min="-12"
                                             max="12"
-                                            step="0.5"
+                                            step="0.1"
                                             value={band.gain}
                                             onChange={(e) => {
                                                 audioEngine.setBandGain(i, parseFloat(e.target.value));
                                                 setCurrentPreset('Custom');
                                             }}
-                                            disabled={!band.enabled}
-                                            className={`w-full h-2 rounded-lg appearance-none cursor-pointer ${band.enabled ? 'accent-purple-500 bg-gray-700' : 'accent-gray-500 bg-gray-800 opacity-50'
-                                                }`}
+                                            onDoubleClick={() => {
+                                                audioEngine.setBandGain(i, 0);
+                                                setCurrentPreset('Custom');
+                                            }}
+                                            className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
+                                        />
+                                        <div className="flex items-center bg-black/50 border border-white/20 rounded">
+                                            <button
+                                                onClick={() => {
+                                                    audioEngine.setBandGain(i, parseFloat((band.gain - 0.1).toFixed(1)));
+                                                    setCurrentPreset('Custom');
+                                                }}
+                                                className="px-1.5 py-0.5 text-gray-400 hover:text-white"
+                                            >-</button>
+                                            <input
+                                                type="number"
+                                                value={band.gain.toFixed(1)}
+                                                onChange={(e) => {
+                                                    audioEngine.setBandGain(i, parseFloat(e.target.value) || 0);
+                                                    setCurrentPreset('Custom');
+                                                }}
+                                                step="0.1"
+                                                className="w-12 bg-transparent text-center text-xs text-white appearance-none border-x border-white/20"
+                                                style={{ MozAppearance: 'textfield' }}
+                                            />
+                                            <button
+                                                onClick={() => {
+                                                    audioEngine.setBandGain(i, parseFloat((band.gain + 0.1).toFixed(1)));
+                                                    setCurrentPreset('Custom');
+                                                }}
+                                                className="px-1.5 py-0.5 text-gray-400 hover:text-white"
+                                            >+</button>
+                                        </div>
+                                    </div>
+
+                                    {/* Q Value */}
+                                    <div className="text-xs text-gray-400 font-mono">Q</div>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="number"
+                                            value={band.Q.toFixed(1)}
+                                            onChange={(e) => {
+                                                audioEngine.setBandQ(i, parseFloat(e.target.value) || 1.0);
+                                                setCurrentPreset('Custom');
+                                            }}
+                                            step="0.1"
+                                            className="w-16 bg-black/50 border border-white/20 rounded px-1 py-0.5 text-xs text-right text-white"
+                                        />
+                                        <input
+                                            type="range"
+                                            min="0.1"
+                                            max="10"
+                                            step="0.1"
+                                            value={band.Q}
+                                            onChange={(e) => {
+                                                audioEngine.setBandQ(i, parseFloat(e.target.value));
+                                                setCurrentPreset('Custom');
+                                            }}
+                                            onDoubleClick={() => {
+                                                audioEngine.setBandQ(i, 1.0);
+                                                setCurrentPreset('Custom');
+                                            }}
+                                            className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
                                         />
                                     </div>
-
-                                    {/* Q and Type (collapsible) */}
-                                    <div className="flex gap-4">
-                                        <div className="flex-1">
-                                            <label className="text-[10px] text-gray-500 uppercase">Q</label>
-                                            <input
-                                                type="range"
-                                                min="0.1"
-                                                max="10"
-                                                step="0.1"
-                                                value={band.Q}
-                                                onChange={(e) => {
-                                                    audioEngine.setBandQ(i, parseFloat(e.target.value));
-                                                    setCurrentPreset('Custom');
-                                                }}
-                                                disabled={!band.enabled}
-                                                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-gray-400"
-                                            />
-                                        </div>
-                                        <div className="w-24">
-                                            <label className="text-[10px] text-gray-500 uppercase">Type</label>
-                                            <select
-                                                value={band.type}
-                                                onChange={(e) => {
-                                                    audioEngine.setBandType(i, e.target.value as FilterType);
-                                                    setCurrentPreset('Custom');
-                                                }}
-                                                disabled={!band.enabled}
-                                                className="w-full bg-gray-700 text-white text-xs rounded px-2 py-1 mt-1"
-                                            >
-                                                <option value="peaking">Peaking</option>
-                                                <option value="lowshelf">Low Shelf</option>
-                                                <option value="highshelf">High Shelf</option>
-                                                <option value="lowpass">Low Pass</option>
-                                                <option value="highpass">High Pass</option>
-                                                <option value="notch">Notch</option>
-                                            </select>
-                                        </div>
-                                    </div>
                                 </div>
-                            ))}
-                        </div>
+                            </div>
+                        ))}
+                    </div>
 
+                    <button
+                        onClick={() => {
+                            audioEngine.resetToFlat();
+                            setCurrentPreset('Flat');
+                        }}
+                        className="w-full mt-6 py-2 bg-transparent border border-white/20 hover:bg-white/10 text-white/70 hover:text-white rounded-lg text-sm transition-colors"
+                    >
+                        Reset to Flat
+                    </button>
+                </div>
+            )}
+
+            {/* Queue Panel - Full height sidebar */}
+            {showQueue && (
+                <div className="w-1/2 border-l border-white/10 p-6 pt-4 overflow-y-auto bg-black/60 backdrop-blur-md relative z-10">
+                    <div className="flex items-center justify-between mb-6">
+                        <h2 className="text-lg font-semibold text-white">Up Next</h2>
                         <button
-                            onClick={() => {
-                                audioEngine.resetToFlat();
-                                setCurrentPreset('Flat');
-                            }}
-                            className="w-full mt-6 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors"
+                            onClick={() => setShowQueue(false)}
+                            className="p-1 hover:bg-white/10 rounded-full"
                         >
-                            Reset to Flat
+                            <X size={18} className="text-gray-400" />
                         </button>
                     </div>
-                )}
-
-                {/* Queue Panel */}
-                {showQueue && (
-                    <div className="w-1/2 border-l border-gray-800 p-6 overflow-y-auto">
-                        <div className="flex items-center justify-between mb-6">
-                            <h2 className="text-lg font-semibold text-white">Up Next</h2>
-                            <button
-                                onClick={() => setShowQueue(false)}
-                                className="p-1 hover:bg-white/10 rounded-full"
-                            >
-                                <X size={18} className="text-gray-400" />
-                            </button>
-                        </div>
-                        <div className="space-y-2">
-                            {queue.length === 0 ? (
-                                <p className="text-gray-500">Queue is empty</p>
-                            ) : (
-                                queue.slice(0, 20).map((track, i) => (
-                                    <div
-                                        key={`${track.id}-${i}`}
-                                        className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors"
-                                    >
-                                        <span className="text-xs text-gray-500 w-6">{i + 1}</span>
-                                        <div className="w-10 h-10 bg-gray-800 rounded overflow-hidden">
-                                            {track.has_art ? (
-                                                <img src={`${serverUrl}/api/art/${track.id}`} alt="" className="w-full h-full object-cover" />
-                                            ) : (
-                                                <div className="w-full h-full flex items-center justify-center">
-                                                    <Disc size={16} className="text-gray-600" />
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="text-sm text-white truncate">{track.title}</div>
-                                            <div className="text-xs text-gray-500 truncate">{track.artist}</div>
-                                        </div>
+                    <div className="space-y-2">
+                        {queue.length === 0 ? (
+                            <p className="text-gray-500">Queue is empty</p>
+                        ) : (
+                            queue.slice(0, 20).map((track, i) => (
+                                <div
+                                    key={`${track.id}-${i}`}
+                                    className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors"
+                                >
+                                    <span className="text-xs text-gray-500 w-6">{i + 1}</span>
+                                    <div className="w-10 h-10 bg-gray-800 rounded overflow-hidden">
+                                        {track.has_art ? (
+                                            <img src={`${serverUrl}/api/art/${track.id}`} alt="" className="w-full h-full object-cover" />
+                                        ) : (
+                                            <div className="w-full h-full flex items-center justify-center">
+                                                <Disc size={16} className="text-gray-600" />
+                                            </div>
+                                        )}
                                     </div>
-                                ))
-                            )}
-                        </div>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-sm text-white truncate">{track.title}</div>
+                                        <div className="text-xs text-gray-500 truncate">{track.artist}</div>
+                                    </div>
+                                </div>
+                            ))
+                        )}
                     </div>
-                )}
-            </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -4,6 +4,7 @@ import { Play, Pause, SkipForward, SkipBack, Volume2, Sliders, Disc, Search, Set
 import { audioEngine } from './audio/AudioEngine';
 import { NowPlaying } from './components/NowPlaying';
 import type { Track, Artist, Credit, Playlist, RepeatMode, ViewTab, AlbumSort, Theme } from './types';
+import { extractColorFromImage } from './utils/colorUtils';
 
 const SERVER_URL = 'http://localhost:3001';
 
@@ -83,6 +84,9 @@ function App() {
 
   // Theme
   const [theme, setTheme] = useState<string>(() => localStorage.getItem('theme') || 'dark');
+
+  // Accent color for Now Playing tint
+  const [accentColor, setAccentColor] = useState<string>('#333333');
 
   const audioRefA = useRef<HTMLAudioElement>(null);
   const audioRefB = useRef<HTMLAudioElement>(null);
@@ -237,6 +241,9 @@ function App() {
       setActiveDeck(nextDeck);
       setCurrentTrackIndex(index);
       setIsPlaying(true);
+
+      // Auto-open Now Playing screen
+      setShowNowPlaying(true);
 
       // Log to listening history
       axios.post(`${SERVER_URL}/api/history/log`, { trackId: nextTrack.id }).catch(() => { });
@@ -536,6 +543,32 @@ function App() {
     }
   }, [selectedArtist]);
 
+  // Dynamic Accent Color - Re-enabled for Tint
+  useEffect(() => {
+    const updateAccentColor = async () => {
+      const track = tracks[currentTrackIndex];
+      if (track && track.has_art) {
+        const imageUrl = `${SERVER_URL}/api/art/${track.id}`;
+        console.log(`[App] Attempting to extract color from: ${imageUrl}`);
+        const color = await extractColorFromImage(imageUrl);
+        if (color) {
+          console.log(`[App] Setting accent color to: ${color}`);
+          setAccentColor(color);
+          document.documentElement.style.setProperty('--app-accent', color);
+          return;
+        } else {
+          console.log('[App] Color extraction returned null, using fallback');
+          setAccentColor('#555555');
+          document.documentElement.style.setProperty('--app-accent', '#878787');
+        }
+      }
+      if (!track) {
+        document.documentElement.style.setProperty('--app-accent', '#878787');
+      }
+    };
+    updateAccentColor();
+  }, [currentTrackIndex, tracks]);
+
   // Poll enrichment status
   useEffect(() => {
     const pollTimer = setInterval(() => {
@@ -580,21 +613,21 @@ function App() {
       <div className="w-16 bg-app-bg border-r border-app-surface flex flex-col items-center py-6 gap-6 shrink-0">
         <button
           onClick={() => setMainTab('home')}
-          className={`p-3 rounded-xl transition-all ${mainTab === 'home' ? 'bg-app-accent text-white' : 'text-app-text-muted hover:text-white hover:bg-app-surface'}`}
+          className={`p-3 rounded-xl transition-all border ${mainTab === 'home' ? 'bg-white/10 border-white/20 text-white shadow-[0_0_15px_rgba(255,255,255,0.1)]' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
           title="Home"
         >
           <Home size={22} />
         </button>
         <button
           onClick={() => setMainTab('library')}
-          className={`p-3 rounded-xl transition-all ${mainTab === 'library' ? 'bg-app-accent text-white' : 'text-app-text-muted hover:text-white hover:bg-app-surface'}`}
+          className={`p-3 rounded-xl transition-all border ${mainTab === 'library' ? 'bg-white/10 border-white/20 text-white shadow-[0_0_15px_rgba(255,255,255,0.1)]' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
           title="Library"
         >
           <Library size={22} />
         </button>
         <button
           onClick={() => setMainTab('settings')}
-          className={`p-3 rounded-xl transition-all ${mainTab === 'settings' ? 'bg-app-accent text-white' : 'text-app-text-muted hover:text-white hover:bg-app-surface'}`}
+          className={`p-3 rounded-xl transition-all border ${mainTab === 'settings' ? 'bg-white/10 border-white/20 text-white shadow-[0_0_15px_rgba(255,255,255,0.1)]' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
           title="Settings"
         >
           <Settings size={22} />
@@ -714,7 +747,10 @@ function App() {
                         onClick={() => {
                           if (!Array.isArray(tracks)) return;
                           const idx = tracks.findIndex(t => t.id === track.id);
-                          if (idx !== -1) playTrack(idx, 'cut');
+                          if (idx !== -1) {
+                            playTrack(idx, 'cut');
+                            setShowNowPlaying(true);
+                          }
                         }}
                       >
                         <div className="aspect-square bg-app-surface rounded-lg mb-2 overflow-hidden">
@@ -799,7 +835,7 @@ function App() {
                           }
                         }
                       }}
-                      className="flex-1 bg-app-accent hover:bg-app-accent/80 text-white rounded-lg py-3 font-medium transition-colors"
+                      className="flex-1 bg-transparent border border-white/20 hover:bg-white/10 text-white rounded-lg py-3 font-medium transition-colors"
                     >
                       <RefreshCcw size={16} className="inline mr-2" />
                       Rescan Library
@@ -823,7 +859,7 @@ function App() {
                       alert("Failed: " + e.message);
                     }
                   }}
-                  className="bg-purple-600 hover:bg-purple-700 text-white rounded-lg px-6 py-3 font-medium transition-colors"
+                  className="bg-transparent border border-white/20 hover:bg-white/10 text-white rounded-lg px-6 py-3 font-medium transition-colors"
                 >
                   Start Enrichment
                 </button>
@@ -839,7 +875,7 @@ function App() {
                   </div>
                   <button
                     onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
-                    className={`relative w-14 h-7 rounded-full transition-colors ${theme === 'dark' ? 'bg-app-accent' : 'bg-gray-300'}`}
+                    className={`relative w-14 h-7 rounded-full transition-colors border ${theme === 'dark' ? 'bg-white/10 border-white/20' : 'bg-gray-300 border-transparent'}`}
                   >
                     <div className={`absolute top-1 left-1 w-5 h-5 bg-white rounded-full transition-transform ${theme === 'light' ? 'translate-x-7' : ''}`} />
                   </button>
@@ -862,7 +898,7 @@ function App() {
           <>
             {/* Header */}
             <div className="h-16 border-b border-app-surface flex items-center px-6 gap-6 shrink-0 z-20 bg-app-bg/95 backdrop-blur">
-              {/* <h1 className="text-xl font-bold bg-gradient-to-r from-app-accent to-purple-500 bg-clip-text text-transparent shrink-0">
+              {/* <h1 className="text-xl font-bold bg-gradient-to-r from-app-accent to-app-accent bg-clip-text text-transparent shrink-0">
                 Library
               </h1> */}
 
@@ -893,8 +929,8 @@ function App() {
                     key={m}
                     onClick={() => handleMoodSelect(moodFilter === m ? '' : m)}
                     className={`px-3 py-1 text-xs rounded-full border transition-all whitespace-nowrap ${moodFilter === m
-                      ? 'bg-app-accent border-app-accent text-white'
-                      : 'border-app-surface hover:border-app-text-muted text-app-text-muted hover:text-white'
+                      ? 'bg-white text-black border-white font-medium'
+                      : 'border-white/20 hover:border-white text-app-text-muted hover:text-white bg-transparent'
                       }`}
                   >
                     {m}
@@ -972,7 +1008,7 @@ function App() {
                           }
                         }
                       }}
-                      className="px-4 py-2 rounded-lg bg-app-accent text-white hover:bg-app-accent/80 transition-colors"
+                      className="px-4 py-2 rounded-lg bg-transparent border border-white/20 text-white hover:bg-white/10 transition-colors"
                     >
                       Clear & Rescan
                     </button>
@@ -994,7 +1030,7 @@ function App() {
                   </button>
                 </div>
 
-                <div className="max-w-5xl mx-auto px-8 py-12">
+                <div className="max-w-5xl mx-auto px-8 pt-12 pb-32">
                   {/* Hero */}
                   <div className="flex flex-col gap-6 mb-12">
                     {/* Info Only - No Image */}
@@ -1020,7 +1056,7 @@ function App() {
                                 setSelectedArtist(null);
                                 // Optional: trigger search effect
                               }}
-                              className="px-3 py-1 rounded-full bg-app-surface text-xs text-app-text-muted border border-app-surface/50 hover:bg-app-accent hover:text-white transition-colors uppercase tracking-wider"
+                              className="px-3 py-1 rounded-full bg-app-surface text-xs text-app-text-muted border border-app-surface/50 hover:bg-white/10 hover:border-white/30 hover:text-white transition-colors uppercase tracking-wider"
                             >
                               {l}
                             </button>
@@ -1050,7 +1086,7 @@ function App() {
                                 href={`https://musicbrainz.org/artist/${artistDetails.artist.mbid}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-purple-400 hover:underline"
+                                className="text-app-accent hover:underline"
                               >
                                 View on MusicBrainz →
                               </a>
@@ -1065,7 +1101,7 @@ function App() {
                               href={`https://musicbrainz.org/artist/${artistDetails.artist.mbid}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-purple-400 hover:underline ml-2"
+                              className="text-app-accent hover:underline ml-2"
                             >
                               View on MusicBrainz →
                             </a>
@@ -1341,9 +1377,12 @@ function App() {
                         <button
                           onClick={() => {
                             const idx = Array.isArray(tracks) ? tracks.findIndex(t => t.album === selectedAlbum.name) : -1;
-                            if (idx !== -1) playTrack(idx, 'cut');
+                            if (idx !== -1) {
+                              playTrack(idx, 'cut');
+                              setShowNowPlaying(true);
+                            }
                           }}
-                          className="bg-app-accent hover:bg-app-accent/80 text-white px-6 py-2.5 rounded-full font-medium text-sm flex items-center gap-2 shadow-sm transition-all"
+                          className="bg-white/5 border border-white/10 hover:bg-white/10 text-white px-6 py-2.5 rounded-full font-medium text-sm flex items-center gap-2 shadow-sm transition-all"
                         >
                           <Play size={16} fill="currentColor" />
                           Play now
@@ -1425,15 +1464,18 @@ function App() {
                     </button>
                   </div>
 
-                  {/* Tracklist vs Credits Content */}
-                  <div className="space-y-1 max-h-[calc(100vh-380px)] overflow-y-auto custom-scrollbar">
+                  {/* Tracklist vs Credits Content - Added pb-32 for floating dock clearance */}
+                  <div className="space-y-1 pb-32">
                     {activeTab === 'tracks' ? (
                       selectedAlbum.tracks.map((track, i) => (
                         <div
                           key={track.id}
                           onClick={() => {
                             const idx = Array.isArray(tracks) ? tracks.findIndex(t => t.id === track.id) : -1;
-                            if (idx !== -1) playTrack(idx, 'cut');
+                            if (idx !== -1) {
+                              playTrack(idx, 'cut');
+                              setShowNowPlaying(true);
+                            }
                           }}
                           className="group flex items-center gap-4 px-4 py-3 hover:bg-app-surface rounded-md cursor-pointer transition-colors"
                         >
@@ -1459,7 +1501,7 @@ function App() {
                           {/* Heart Icon */}
                           <button
                             onClick={(e) => toggleFavorite(e, track.id)}
-                            className={`p-1 hover:bg-app-accent/20 rounded transition-all ${track.rating === 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                            className={`p-1 hover:bg-white/10 rounded transition-all ${track.rating === 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
                           >
                             <svg className={`w-4 h-4 transition-colors ${track.rating === 1 ? 'text-app-accent fill-app-accent' : 'text-app-text-muted'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
@@ -1491,7 +1533,7 @@ function App() {
                                       }}
                                       className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-app-surface transition-colors text-left group"
                                     >
-                                      <div className="w-8 h-8 rounded-full bg-app-surface flex items-center justify-center text-xs font-medium text-app-text-muted group-hover:bg-app-accent group-hover:text-white transition-colors">
+                                      <div className="w-8 h-8 rounded-full bg-app-surface flex items-center justify-center text-xs font-medium text-app-text-muted group-hover:bg-white/10 group-hover:text-white transition-colors border border-transparent group-hover:border-white/20">
                                         {credit.name?.charAt(0).toUpperCase()}
                                       </div>
                                       <div className="flex-1 min-w-0">
@@ -1530,7 +1572,7 @@ function App() {
                               </div>
                               <div className="w-full h-1.5 bg-app-surface rounded-full overflow-hidden">
                                 <div
-                                  className="h-full bg-app-accent transition-all duration-300 ease-out"
+                                  className="h-full bg-white/80 shadow-[0_0_10px_rgba(255,255,255,0.3)] transition-all duration-300 ease-out"
                                   style={{ width: `${(enrichmentStatus.processed / (enrichmentStatus.total || 1)) * 100}%` }}
                                 />
                               </div>
@@ -1551,7 +1593,7 @@ function App() {
                                     console.error("Enrichment failed:", e);
                                   }
                                 }}
-                                className="px-4 py-2 bg-app-surface hover:bg-app-accent hover:text-white text-app-text-muted rounded-lg transition-colors text-sm flex items-center gap-2"
+                                className="px-4 py-2 bg-app-surface border border-white/5 hover:bg-white/10 hover:border-white/20 hover:text-white text-app-text-muted rounded-lg transition-colors text-sm flex items-center gap-2"
                               >
                                 <span>🎵</span>
                                 <span>Enrich with MusicBrainz</span>
@@ -1562,6 +1604,28 @@ function App() {
                         </div>
                       </div>
                     )}
+
+                    {/* Album Footer Info - Copyright & Labels */}
+                    <div className="mt-12 pt-8 border-t border-app-surface/30 text-center">
+                      <div className="text-sm font-medium text-app-text-muted">
+                        © {selectedAlbum.year || ''} {albumMetadata?.label?.name || selectedAlbum.artist}
+                      </div>
+                      <div className="flex flex-col items-center gap-1 mt-2 text-xs text-app-text-muted/60 font-mono">
+                        {albumMetadata?.label?.name && (
+                          <span>Released by {albumMetadata.label.name}</span>
+                        )}
+                        {albumMetadata?.release?.country && (
+                          <span>{albumMetadata.release.country} Release</span>
+                        )}
+                        {albumMetadata?.release?.barcode && (
+                          <span className="opacity-50">UPC: {albumMetadata.release.barcode}</span>
+                        )}
+                      </div>
+                      <div className="mt-6 flex justify-center gap-4 opacity-40 grayscale hover:grayscale-0 transition-all duration-500">
+                        {/* Placeholder for label logos / copyright badges */}
+                        <Disc size={24} />
+                      </div>
+                    </div>
                   </div>
 
                 </div>
@@ -1592,7 +1656,7 @@ function App() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setView('grid')}
-                        className={`p-2 rounded-lg transition-colors ${view === 'grid' ? 'bg-app-accent text-white' : 'text-app-text-muted hover:text-white hover:bg-app-surface'}`}
+                        className={`p-2 rounded-lg transition-colors border ${view === 'grid' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
                         title="Grid View"
                       >
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1604,7 +1668,7 @@ function App() {
                       </button>
                       <button
                         onClick={() => setView('list')}
-                        className={`p-2 rounded-lg transition-colors ${view === 'list' ? 'bg-app-accent text-white' : 'text-app-text-muted hover:text-white hover:bg-app-surface'}`}
+                        className={`p-2 rounded-lg transition-colors border ${view === 'list' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
                         title="List View"
                       >
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -1619,7 +1683,7 @@ function App() {
                       <div className="w-px h-6 bg-white/10 mx-1"></div>
                       <button
                         onClick={() => setView('artists')}
-                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${view === 'artists' ? 'bg-app-accent text-white' : 'text-app-text-muted hover:text-white hover:bg-app-surface'}`}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${view === 'artists' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
                       >
                         Artists
                       </button>
@@ -1800,124 +1864,12 @@ function App() {
                 </div>
                 <button
                   onClick={() => setShowNowPlaying(true)}
-                  className="text-xs text-purple-400 hover:text-purple-300 mt-2"
+                  className="text-xs text-app-accent hover:text-app-accent/80 mt-2"
                 >
                   Open Full Parametric EQ →
                 </button>
               </div>
             )}
-
-            {/* Player Bar */}
-            <div className="h-24 bg-app-surface border-t border-white/5 px-6 flex items-center justify-between shrink-0 z-10 relative">
-              {/* Track Info */}
-              <div className="w-1/3 flex items-center gap-4">
-                {currentTrack && (
-                  <>
-                    <div
-                      onClick={() => setShowNowPlaying(true)}
-                      className="h-14 w-14 bg-black/20 rounded-md flex items-center justify-center text-app-text-muted cursor-pointer hover:scale-105 transition-transform overflow-hidden"
-                    >
-                      {currentTrack.has_art ? (
-                        <img src={`${SERVER_URL}/api/art/${currentTrack.id}`} alt="" className="w-full h-full object-cover" />
-                      ) : (
-                        <Disc size={24} />
-                      )}
-                    </div>
-                    <div>
-                      <div className="font-medium text-app-text truncate">{currentTrack.title}</div>
-                      <div
-                        className="text-xs text-app-text-muted truncate cursor-pointer hover:text-white transition-colors"
-                        onClick={() => {
-                          const artist = artists.find(a => a.name === currentTrack.artist);
-                          if (artist) setSelectedArtist(artist);
-                        }}
-                      >
-                        {currentTrack.artist}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Controls (Center) */}
-              <div className="w-1/3 flex flex-col items-center gap-2">
-                <div className="flex items-center gap-6">
-                  <button
-                    onClick={() => setShuffleMode(s => !s)}
-                    className={`transition-colors ${shuffleMode ? 'text-app-accent' : 'text-app-text-muted hover:text-white'}`}
-                    title="Shuffle (S)"
-                  >
-                    <Shuffle size={16} />
-                  </button>
-                  <button onClick={() => playTrack(currentTrackIndex - 1, 'cut')} className="text-app-text-muted hover:text-white transition-colors"><SkipBack size={20} /></button>
-                  <button
-                    onClick={togglePlay}
-                    className="h-10 w-10 bg-app-text text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform"
-                  >
-                    {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" className="ml-1" />}
-                  </button>
-                  <button onClick={() => playTrack(currentTrackIndex + 1, 'crossfade')} className="text-app-text-muted hover:text-white transition-colors"><SkipForward size={20} /></button>
-                  <button
-                    onClick={() => setRepeatMode(r => r === 'off' ? 'all' : r === 'all' ? 'one' : 'off')}
-                    className={`transition-colors ${repeatMode !== 'off' ? 'text-app-accent' : 'text-app-text-muted hover:text-white'}`}
-                    title="Repeat (R)"
-                  >
-                    {repeatMode === 'one' ? <Repeat1 size={16} /> : <Repeat size={16} />}
-                  </button>
-                </div>
-                {/* Progress Bar placeholder */}
-                <div className="w-full max-w-md h-1 bg-white/10 rounded-full overflow-hidden">
-                  {/* Progress fill would go here */}
-                </div>
-              </div>
-
-              {/* Extra Controls (Right) */}
-              <div className="w-1/3 flex items-center justify-end gap-4">
-                {currentTrack && (
-                  <div className="hidden lg:flex flex-col text-[10px] text-app-text-muted text-right mr-2">
-                    {currentTrack.bpm && <span>{Math.round(currentTrack.bpm)} BPM</span>}
-                    {currentTrack.key && <span>Key: {currentTrack.key}</span>}
-                    {currentTrack.year && <span>{currentTrack.year}</span>}
-                  </div>
-                )}
-
-                <button
-                  onClick={startSonicAdventure}
-                  className="p-2 rounded-lg text-app-text-muted hover:text-purple-400 hover:bg-purple-400/10 transition-colors"
-                  title="Sonic Adventure (Play Similar)"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4V2" /><path d="M15 16v-2" /><path d="M8 9h2" /><path d="M20 9h2" /><path d="M17.8 11.8 19 13" /><path d="M15 9h0" /><path d="M17.8 6.2 19 5" /><path d="m3 21 9-9" /><path d="M12.2 6.2 11 5" /></svg>
-                </button>
-
-                <button
-                  onClick={() => setShowEq(!showEq)}
-                  className={`p-2 rounded-lg transition-colors ${showEq ? 'bg-app-accent/20 text-app-accent' : 'text-app-text-muted hover:text-white'}`}
-                  title="Equalizer"
-                >
-                  <Sliders size={20} />
-                </button>
-                <div className="flex items-center gap-2 group">
-                  <Volume2 size={20} className="text-app-text-muted" />
-                  <input
-                    type="range" min="0" max="1" step="0.01"
-                    value={volume}
-                    onChange={(e) => {
-                      const newVolume = parseFloat(e.target.value);
-                      setVolume(newVolume);
-                      // This volume control will now only affect the currently active deck's HTMLAudioElement volume,
-                      // but the Web Audio API gain node will still control the overall output.
-                      // For a dual-deck setup, volume should ideally be controlled via audioEngine.setMasterVolume()
-                      // or individual deck volumes. For now, this HTMLAudioElement volume will be overridden by the gain node.
-                      // We'll leave it as is for now, but note this is a simplification.
-                      if (activeDeck === 'A' && audioRefA.current) audioRefA.current.volume = newVolume;
-                      if (activeDeck === 'B' && audioRefB.current) audioRefB.current.volume = newVolume;
-                    }}
-                    className="w-24 accent-app-text h-1 bg-white/20 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-              </div>
-
-            </div>
           </>
         )}
 
@@ -1948,6 +1900,81 @@ function App() {
             crossOrigin="anonymous"
           />
         </div>
+
+        {/* Floating Player Dock - Always visible except when Now Playing is open */}
+        {!showNowPlaying && currentTrack && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[200] pointer-events-none">
+            <div className="pointer-events-auto bg-gray-900/80 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl px-6 py-4 flex items-center gap-8">
+              {/* Track Info */}
+              <div className="flex items-center gap-3">
+                <div
+                  onClick={() => setShowNowPlaying(true)}
+                  className="h-12 w-12 bg-black/20 rounded-lg flex items-center justify-center text-app-text-muted cursor-pointer hover:scale-105 transition-transform overflow-hidden"
+                >
+                  {currentTrack.has_art ? (
+                    <img src={`${SERVER_URL}/api/art/${currentTrack.id}`} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <Disc size={20} />
+                  )}
+                </div>
+                <div className="max-w-[200px]">
+                  <div className="font-medium text-white text-sm truncate">{currentTrack.title}</div>
+                  <div
+                    className="text-xs text-gray-400 truncate cursor-pointer hover:text-white transition-colors"
+                    onClick={() => {
+                      const artist = artists.find(a => a.name === currentTrack.artist);
+                      if (artist) setSelectedArtist(artist);
+                    }}
+                  >
+                    {currentTrack.artist}
+                  </div>
+                </div>
+              </div>
+
+              {/* Controls (Center) */}
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={() => setShuffleMode(s => !s)}
+                  className={`transition-colors ${shuffleMode ? 'text-app-accent' : 'text-gray-400 hover:text-white'}`}
+                  title="Shuffle (S)"
+                >
+                  <Shuffle size={18} />
+                </button>
+                <button onClick={() => playTrack(currentTrackIndex - 1, 'cut')} className="text-gray-400 hover:text-white transition-colors"><SkipBack size={22} /></button>
+                <button
+                  onClick={togglePlay}
+                  className="h-12 w-12 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-lg"
+                >
+                  {isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" className="ml-0.5" />}
+                </button>
+                <button onClick={() => playTrack(currentTrackIndex + 1, 'crossfade')} className="text-gray-400 hover:text-white transition-colors"><SkipForward size={22} /></button>
+                <button
+                  onClick={() => setRepeatMode(r => r === 'off' ? 'all' : r === 'all' ? 'one' : 'off')}
+                  className={`transition-colors ${repeatMode !== 'off' ? 'text-app-accent' : 'text-gray-400 hover:text-white'}`}
+                  title="Repeat (R)"
+                >
+                  {repeatMode === 'one' ? <Repeat1 size={18} /> : <Repeat size={18} />}
+                </button>
+              </div>
+
+              {/* Volume Control */}
+              <div className="flex items-center gap-2">
+                <Volume2 size={18} className="text-gray-400" />
+                <input
+                  type="range" min="0" max="1" step="0.01"
+                  value={volume}
+                  onChange={(e) => {
+                    const newVolume = parseFloat(e.target.value);
+                    setVolume(newVolume);
+                    if (activeDeck === 'A' && audioRefA.current) audioRefA.current.volume = newVolume;
+                    if (activeDeck === 'B' && audioRefB.current) audioRefB.current.volume = newVolume;
+                  }}
+                  className="w-20 accent-app-accent h-1 bg-white/20 rounded-lg appearance-none cursor-pointer"
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Now Playing Full-Screen View */}
         <NowPlaying
@@ -1981,11 +2008,30 @@ function App() {
           }}
           serverUrl={SERVER_URL}
           queue={Array.isArray(tracks) ? tracks.slice(currentTrackIndex + 1, currentTrackIndex + 21) : []}
+          accentColor={accentColor}
           onArtistClick={(artistName) => {
             const artist = Array.isArray(artists) ? artists.find(a => a.name === artistName) : null;
             if (artist) {
               setSelectedArtist(artist);
               setShowNowPlaying(false);
+            } else {
+              // Artist not in local list, try to show anyway by creating a minimal object
+              setSelectedArtist({ name: artistName, id: 0, track_count: 0 } as any);
+              setShowNowPlaying(false);
+            }
+          }}
+          onAlbumClick={(albumName, artistName) => {
+            const album = Array.isArray(albums) ? albums.find(a => a.name === albumName && a.artist === artistName) : null;
+            if (album) {
+              setSelectedAlbum(album);
+              setShowNowPlaying(false);
+            } else {
+              // Try to find by name only if artist match fails
+              const albumByName = Array.isArray(albums) ? albums.find(a => a.name === albumName) : null;
+              if (albumByName) {
+                setSelectedAlbum(albumByName);
+                setShowNowPlaying(false);
+              }
             }
           }}
         />

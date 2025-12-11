@@ -10,7 +10,7 @@ export default {
                 // Dark, premium palette
                 'app-bg': '#0a0a0a',
                 'app-surface': '#1a1a1a',
-                'app-accent': '#e11d48', // Rose-600 roughly
+                'app-accent': 'var(--app-accent)', // Dynamic from album art
                 'app-text': '#e5e5e5',
                 'app-text-muted': '#a3a3a3',
             }

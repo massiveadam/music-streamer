@@ -2,9 +2,9 @@
 
 @theme {
   /* Custom color palette */
-  --color-app-bg: #0a0a0a;
+  --color-app-bg: #000000;
   --color-app-surface: #1a1a1a;
-  --color-app-accent: #e11d48;
+  --color-app-accent: #878787;
   --color-app-text: #e5e5e5;
   --color-app-text-muted: #a3a3a3;
 }
