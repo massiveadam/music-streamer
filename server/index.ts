@@ -4,11 +4,13 @@ import cors from 'cors';
 import * as fs from 'fs';
 import * as path from 'path';
 import { parseFile, IAudioMetadata } from 'music-metadata';
-import db from './db';
+import db, { getSetting, setSetting } from './db';
 import type { Track, Artist, Credit } from '../types';
 import * as musicbrainz from './musicbrainz';
 import * as lastfm from './lastfm';
 import * as wikipedia from './wikipedia';
+import * as auth from './auth';
+import type { AuthRequest } from './auth';
 
 const app = express();
 const PORT = 3001;
@@ -186,51 +188,180 @@ async function startBackgroundScan(scanPath: string, limit: number = 0): Promise
 
 // ========== API ENDPOINTS ==========
 
-// 1. Trigger Scan
-app.post('/api/scan', (req: Request, res: Response) => {
-    const { path: scanPath, limit } = req.body;
-    if (!scanPath || !fs.existsSync(scanPath)) {
-        return res.status(400).json({ error: 'Invalid path' });
-    }
-
-    const limitNum = parseInt(limit) || 0;
-    startBackgroundScan(scanPath, limitNum);
-    res.json({ message: 'Scan started' });
-});
-
+// 1. Trigger Scan - Moved to specific section below
 // 2. Scan Status
 app.get('/api/status', (_req: Request, res: Response) => {
     res.json(scanStatus);
 });
 
-// 3. Clear Library
-app.post('/api/clear', (_req: Request, res: Response) => {
-    const tables = [
-        'tracks', 'artists', 'releases', 'labels', 'credits',
-        'playlists', 'playlist_tracks', 'listening_history',
-        'tags', 'entity_tags', 'album_images'
-    ];
+// 3. Clear Library - Moved to specific section below
 
+// ==================== AUTH ENDPOINTS ====================
+
+// Check if setup is required (no users exist)
+app.get('/api/auth/setup', (req: Request, res: Response) => {
+    const setupRequired = !auth.hasUsers();
+    res.json({ setupRequired });
+});
+
+// Register new user
+app.post('/api/auth/register', async (req: Request, res: Response) => {
     try {
-        db.transaction(() => {
-            for (const table of tables) {
-                db.prepare(`DELETE FROM ${table}`).run();
-                db.prepare('DELETE FROM sqlite_sequence WHERE name=?').run(table);
-            }
-        })();
+        const { username, password, displayName } = req.body;
 
-        const files = fs.readdirSync(ART_DIR);
-        for (const file of files) {
-            fs.unlinkSync(path.join(ART_DIR, file));
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
         }
 
-        console.log('Library fully cleared');
-        res.json({ message: 'Library cleared' });
+        // Check if this is the first user (becomes admin)
+        const isFirstUser = !auth.hasUsers();
+
+        // If not first user, require admin token (unless we want open registration)
+        // For now, let's allow open registration but only first user is admin
+        // const isProtected = !isFirstUser; 
+
+        // if (isProtected) {
+        //     // Check for admin token if we want to restrict registration
+        // }
+
+        try {
+            const user = await auth.createUser(username, password, displayName, isFirstUser);
+            const token = auth.generateToken(user);
+            res.json({ user, token });
+        } catch (e: any) {
+            if (e.message && e.message.includes('UNIQUE constraint failed')) {
+                return res.status(409).json({ error: 'Username already exists' });
+            }
+            throw e;
+        }
     } catch (err) {
-        console.error('Error clearing library:', err);
-        res.status(500).json({ error: 'Failed to clear library' });
+        console.error('Registration error:', err);
+        res.status(500).json({ error: 'Registration failed' });
     }
 });
+
+// Login
+app.post('/api/auth/login', async (req: Request, res: Response) => {
+    try {
+        const { username, password } = req.body;
+
+        const userWithPassword = auth.getUserByUsername(username);
+
+        if (!userWithPassword || !(await auth.verifyPassword(password, userWithPassword.password_hash))) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const { password_hash, ...user } = userWithPassword;
+        const token = auth.generateToken(user);
+
+        res.json({ user, token });
+    } catch (err) {
+        console.error('Login error:', err);
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+// Get current user
+app.get('/api/auth/me', auth.authenticateToken, (req: AuthRequest, res: Response) => {
+    res.json(req.user);
+});
+
+// Update user settings (EQ preset)
+app.put('/api/auth/settings', auth.authenticateToken, (req: AuthRequest, res: Response) => {
+    try {
+        const { eqPreset } = req.body;
+        if (req.user) {
+            auth.updateUserEqPreset(req.user.id, JSON.stringify(eqPreset));
+            res.json({ success: true });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to update settings' });
+    }
+});
+
+// Admin: Get all users
+app.get('/api/users', auth.authenticateToken, auth.requireAdmin, (req: Request, res: Response) => {
+    const users = auth.getAllUsers();
+    res.json(users);
+});
+
+// Admin: Create user
+app.post('/api/users', auth.authenticateToken, auth.requireAdmin, async (req: Request, res: Response) => {
+    try {
+        const { username, password, displayName, isAdmin } = req.body;
+        if (!username || !password) {
+            return res.status(400).json({ error: 'Username and password required' });
+        }
+
+        try {
+            const user = await auth.createUser(username, password, displayName, isAdmin);
+            res.json(user);
+        } catch (e: any) {
+            if (e.message && e.message.includes('UNIQUE constraint failed')) {
+                return res.status(409).json({ error: 'Username already exists' });
+            }
+            throw e;
+        }
+    } catch (err) {
+        console.error('Create user error:', err);
+        res.status(500).json({ error: 'Failed to create user' });
+    }
+});
+
+// Admin: Delete user
+app.delete('/api/users/:id', auth.authenticateToken, auth.requireAdmin, (req: Request, res: Response) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (isNaN(id)) return res.status(400).json({ error: 'Invalid ID' });
+
+        // Prevent deleting self
+        // Note: req.user is guaranteed by authenticateToken
+        // We need to cast req to AuthRequest inside the handler or use it in definition, 
+        // strictly speaking app.delete definition matches Requesthandler, 
+        // but we can access req.user if we know middleware ran.
+        // Let's use AuthRequest type assertion for safely accessing user.
+        const authReq = req as AuthRequest;
+
+        if (authReq.user && authReq.user.id === id) {
+            return res.status(400).json({ error: 'Cannot delete yourself' });
+        }
+
+        const success = auth.deleteUser(id);
+        if (success) {
+            res.json({ success: true });
+        } else {
+            res.status(404).json({ error: 'User not found' });
+        }
+    } catch (err) {
+        console.error('Delete user error:', err);
+        res.status(500).json({ error: 'Failed to delete user' });
+    }
+});
+
+// Public: Get Client Config (e.g. Last.fm API Key for redirect)
+app.get('/api/config/public', (req: Request, res: Response) => {
+    res.json({
+        lastfm_api_key: getSetting('lastfm_api_key') || process.env.LASTFM_API_KEY
+    });
+});
+
+// Admin: Get System Settings
+app.get('/api/settings/system', auth.authenticateToken, auth.requireAdmin, (req: Request, res: Response) => {
+    res.json({
+        lastfm_api_key: getSetting('lastfm_api_key') || '',
+        lastfm_api_secret: getSetting('lastfm_api_secret') || ''
+    });
+});
+
+// Admin: Update System Settings
+app.put('/api/settings/system', auth.authenticateToken, auth.requireAdmin, (req: Request, res: Response) => {
+    const { lastfm_api_key, lastfm_api_secret } = req.body;
+    if (lastfm_api_key !== undefined) setSetting('lastfm_api_key', lastfm_api_key);
+    if (lastfm_api_secret !== undefined) setSetting('lastfm_api_secret', lastfm_api_secret);
+    res.json({ success: true });
+});
+
+// ==================== API ROUTES ====================
 
 // 4. Get All Tracks (Paginated)
 app.get('/api/tracks', (req: Request, res: Response) => {
@@ -349,7 +480,7 @@ app.get('/api/search', (req: Request, res: Response) => {
         }
 
         const query = `%${(q as string).trim()}%`;
-        
+
         // Optimized search with UNION to avoid LEFT JOIN performance issues
         const sql = `
             SELECT DISTINCT t.*
@@ -365,7 +496,7 @@ app.get('/api/search', (req: Request, res: Response) => {
         `;
 
         const results = db.prepare(sql).all(query, query, query, query, query, query, limit, offset) as Track[];
-        
+
         // Get total count for pagination
         const countSql = `
             SELECT COUNT(*) as total FROM (
@@ -379,7 +510,7 @@ app.get('/api/search', (req: Request, res: Response) => {
                 WHERE c.name LIKE ?
             )
         `;
-        
+
         const totalResult = db.prepare(countSql).get(query, query, query, query, query, query) as { total: number };
         const total = totalResult.total;
 
@@ -440,21 +571,76 @@ app.post('/api/favorite', (req: Request, res: Response) => {
     }
 });
 
-// 10. Start MusicBrainz Enrichment (legacy per-track)
-app.post('/api/enrich', async (_req: Request, res: Response) => {
+// 4. Clear Library (Admin only)
+app.post('/api/clear', auth.requireAdmin, (req: AuthRequest, res: Response) => {
+    const tables = [
+        'tracks', 'artists', 'releases', 'labels', 'credits',
+        'playlists', 'playlist_tracks', 'listening_history',
+        'tags', 'entity_tags', 'album_images'
+    ];
+
+    try {
+        db.transaction(() => {
+            for (const table of tables) {
+                db.prepare(`DELETE FROM ${table}`).run();
+                db.prepare('DELETE FROM sqlite_sequence WHERE name=?').run(table);
+            }
+        })();
+
+        // Clean up art dir
+        try {
+            const files = fs.readdirSync(ART_DIR);
+            for (const file of files) {
+                fs.unlinkSync(path.join(ART_DIR, file));
+            }
+        } catch (e) { /* ignore */ }
+
+        scanStatus = {
+            isScanning: false,
+            processedCount: 0,
+            currentFile: '',
+            totalFilesFound: 0,
+            startTime: null
+        };
+
+        console.log('Library fully cleared');
+        res.json({ message: 'Library cleared' });
+    } catch (err) {
+        console.error('Error clearing library:', err);
+        res.status(500).json({ error: 'Failed to clear library' });
+    }
+});
+
+// 5. Scan Library (Admin only)
+app.post('/api/scan', auth.requireAdmin, (req: AuthRequest, res: Response) => {
+    const { path: scanPath, limit } = req.body;
+    if (!scanPath) return res.status(400).json({ error: 'Missing path' });
+
+    if (scanStatus.isScanning) return res.status(409).json({ error: 'Scan already in progress' });
+
+    const limitNum = parseInt(limit) || 0;
+    // Use the existing background scan function which handles state correctly
+    startBackgroundScan(scanPath, limitNum);
+
+    res.json({ message: 'Scan started' });
+});
+
+
+// 10. Start MusicBrainz Enrichment (Admin only)
+app.post('/api/enrich', auth.requireAdmin, async (_req: AuthRequest, res: Response) => {
     musicbrainz.startEnrichment();
     res.json({ message: 'Enrichment started' });
 });
 
-// 10a. Fast album-based enrichment (recommended for large libraries)
-app.post('/api/enrich/fast', async (req: Request, res: Response) => {
+// 10a. Fast album-based enrichment (Admin only)
+app.post('/api/enrich/fast', auth.requireAdmin, async (req: AuthRequest, res: Response) => {
     const workerCount = parseInt(req.body?.workers as string) || 3;
     musicbrainz.startAlbumEnrichment(workerCount);
     res.json({ message: `Fast album-based enrichment started with ${workerCount} workers` });
 });
 
-// 10b. Bulk enrich artist bios (Wikipedia + Last.fm) - Optimized
-app.post('/api/enrich/artists', async (_req: Request, res: Response) => {
+// 10b. Bulk enrich artist bios (Admin only)
+app.post('/api/enrich/artists', auth.requireAdmin, async (_req: AuthRequest, res: Response) => {
     try {
         // Get all artists without descriptions
         const artists = db.prepare('SELECT * FROM artists WHERE description IS NULL OR description = ""').all() as Artist[];
@@ -473,7 +659,7 @@ app.post('/api/enrich/artists', async (_req: Request, res: Response) => {
         // Process artists in batches to avoid overwhelming APIs
         for (let i = 0; i < artists.length; i += batchSize) {
             const batch = artists.slice(i, i + batchSize);
-            
+
             const promises = batch.map(async (artist) => {
                 try {
                     // Try Last.fm first
@@ -493,7 +679,7 @@ app.post('/api/enrich/artists', async (_req: Request, res: Response) => {
                             .run(wikiResult.bio, wikiResult.url, artist.id);
                         return { success: true, artist: artist.name };
                     }
-                    
+
                     return { success: false, artist: artist.name, reason: 'No data found' };
                 } catch (e) {
                     console.error(`Failed to enrich ${artist.name}:`, (e as Error).message);
@@ -502,7 +688,7 @@ app.post('/api/enrich/artists', async (_req: Request, res: Response) => {
             });
 
             const results = await Promise.allSettled(promises);
-            
+
             // Process results
             results.forEach(result => {
                 if (result.status === 'fulfilled') {
@@ -813,24 +999,36 @@ app.get('/api/album-metadata', (req: Request, res: Response) => {
 // ========== PHASE 2 ENDPOINTS ==========
 
 // Log a play to listening history
-app.post('/api/history/log', (req: Request, res: Response) => {
+app.post('/api/history/log', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { trackId } = req.body;
     if (!trackId) return res.status(400).json({ error: 'trackId required' });
 
-    db.prepare('INSERT INTO listening_history (track_id) VALUES (?)').run(trackId);
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.id) as any;
+    db.prepare('INSERT INTO listening_history (track_id, user_id) VALUES (?, ?)').run(trackId, req.user!.id);
+
+    // Update Last.fm Now Playing
+    if (user && user.lastfm_session_key) {
+        const track = db.prepare('SELECT * FROM tracks WHERE id = ?').get(trackId) as Track;
+        if (track) {
+            lastfm.updateNowPlaying(user.lastfm_session_key, track.artist, track.title, track.album)
+                .catch(err => console.error('Last.fm Now Playing Error:', err));
+        }
+    }
+
     res.json({ success: true });
 });
 
 // Get recently played tracks
-app.get('/api/history/recent', (req: Request, res: Response) => {
+app.get('/api/history/recent', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 20;
     const history = db.prepare(`
     SELECT t.*, h.played_at
     FROM listening_history h
     JOIN tracks t ON h.track_id = t.id
+    WHERE h.user_id = ?
     ORDER BY h.played_at DESC
     LIMIT ?
-  `).all(limit);
+  `).all(req.user!.id, limit);
     res.json(history);
 });
 
@@ -845,11 +1043,59 @@ app.get('/api/tracks/recent', (req: Request, res: Response) => {
     res.json(tracks);
 });
 
+// ========== USER SETTINGS & INTEGRATIONS ==========
+
+// Updated EQ Preset
+app.put('/api/user/eq', auth.authenticateToken, (req: AuthRequest, res: Response) => {
+    const { preset } = req.body;
+    // Preset format: "0,0,0,0,0,0,0,0,0,0" (10 bands)
+    db.prepare('UPDATE users SET eq_preset = ? WHERE id = ?').run(preset, req.user!.id);
+    res.json({ success: true, preset });
+});
+
+// Last.fm Auth - Exchange Token
+app.post('/api/auth/lastfm/token', auth.authenticateToken, async (req: AuthRequest, res: Response) => {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Token required' });
+
+    const session = await lastfm.getSession(token);
+    if (!session) return res.status(401).json({ error: 'Failed to get Last.fm session' });
+
+    db.prepare('UPDATE users SET lastfm_session_key = ?, lastfm_username = ? WHERE id = ?')
+        .run(session.sessionKey, session.username, req.user!.id);
+
+    res.json({ success: true, username: session.username });
+});
+
+// Last.fm Scrobble
+app.post('/api/user/scrobble', auth.authenticateToken, async (req: AuthRequest, res: Response) => {
+    // Get user's session key
+    const user = db.prepare('SELECT lastfm_session_key FROM users WHERE id = ?').get(req.user!.id) as { lastfm_session_key: string } | undefined;
+
+    if (!user || !user.lastfm_session_key) {
+        return res.status(400).json({ error: 'User not connected to Last.fm' });
+    }
+
+    const { artist, track, album, timestamp } = req.body;
+    if (!artist || !track) return res.status(400).json({ error: 'Missing track data' });
+
+    // Fire and forget scrobble to not block response
+    lastfm.scrobble(user.lastfm_session_key, artist, track, timestamp || Math.floor(Date.now() / 1000), album);
+
+    // Also update "Now Playing" status
+    lastfm.updateNowPlaying(user.lastfm_session_key, artist, track, album);
+
+    res.json({ success: true });
+});
+
+// ========== PHASE 3: PLAYLISTS ==========
+
 // ========== PLAYLIST ENDPOINTS ==========
 
-// Get all playlists
-app.get('/api/playlists', (_req: Request, res: Response) => {
-    const playlists = db.prepare('SELECT * FROM playlists ORDER BY updated_at DESC').all();
+// Get all playlists (User's own + Shared/Featured)
+app.get('/api/playlists', auth.authenticateToken, (req: AuthRequest, res: Response) => {
+    // Return user's playlists
+    const playlists = db.prepare('SELECT * FROM playlists WHERE user_id = ? ORDER BY updated_at DESC').all(req.user!.id);
     res.json(playlists);
 });
 
@@ -860,23 +1106,32 @@ app.get('/api/playlists/featured', (_req: Request, res: Response) => {
 });
 
 // Get playlists pinned to homepage (MUST be before :id route!)
-app.get('/api/playlists/home', (_req: Request, res: Response) => {
+app.get('/api/playlists/home', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const playlists = db.prepare(`
         SELECT p.*, 
                (SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = p.id) as track_count,
                (SELECT t.id FROM playlist_tracks pt JOIN tracks t ON pt.track_id = t.id WHERE pt.playlist_id = p.id AND t.has_art = 1 LIMIT 1) as cover_track_id
         FROM playlists p 
-        WHERE p.pinned_to_home = 1 
+        WHERE p.pinned_to_home = 1 AND p.user_id = ?
         ORDER BY p.updated_at DESC
-    `).all();
+    `).all(req.user!.id);
     res.json(playlists);
 });
 
 // Get playlist with tracks
-app.get('/api/playlists/:id', (req: Request, res: Response) => {
+app.get('/api/playlists/:id', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id);
+    // Allow if user matches OR if playlist is featured/public (future proofing)
+    const playlist = db.prepare('SELECT * FROM playlists WHERE id = ?').get(id) as Playlist | undefined;
+
     if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
+
+    // Check access
+    if (playlist.user_id !== null && playlist.user_id !== req.user!.id && !playlist.is_featured) {
+        // If we want to allow viewing other people's playlists later, we'd check for "is_public" here
+        // For now, only owner or featured
+        return res.status(403).json({ error: 'Access denied' });
+    }
 
     const tracks = db.prepare(`
     SELECT t.*, pt.position
@@ -890,19 +1145,24 @@ app.get('/api/playlists/:id', (req: Request, res: Response) => {
 });
 
 // Create playlist
-app.post('/api/playlists', (req: Request, res: Response) => {
+app.post('/api/playlists', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { name, description, is_featured } = req.body;
     if (!name) return res.status(400).json({ error: 'name required' });
 
-    const result = db.prepare('INSERT INTO playlists (name, description, is_featured) VALUES (?, ?, ?)').run(name, description || '', is_featured ? 1 : 0);
-    res.json({ id: result.lastInsertRowid, name, description, is_featured });
+    const result = db.prepare('INSERT INTO playlists (name, description, is_featured, user_id) VALUES (?, ?, ?, ?)').run(name, description || '', is_featured ? 1 : 0, req.user!.id);
+    res.json({ id: result.lastInsertRowid, name, description, is_featured, user_id: req.user!.id });
 });
 
 // Add track to playlist
-app.post('/api/playlists/:id/tracks', (req: Request, res: Response) => {
+app.post('/api/playlists/:id/tracks', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { trackId } = req.body;
     if (!trackId) return res.status(400).json({ error: 'trackId required' });
+
+    // Verify ownership
+    const playlist = db.prepare('SELECT user_id FROM playlists WHERE id = ?').get(id) as { user_id: number } | undefined;
+    if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
+    if (playlist.user_id !== req.user!.id) return res.status(403).json({ error: 'Access denied' });
 
     // Check if track already in playlist
     const existing = db.prepare('SELECT id FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?').get(id, trackId);
@@ -918,12 +1178,17 @@ app.post('/api/playlists/:id/tracks', (req: Request, res: Response) => {
 });
 
 // Add multiple tracks to playlist at once
-app.post('/api/playlists/:id/tracks/batch', (req: Request, res: Response) => {
+app.post('/api/playlists/:id/tracks/batch', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { trackIds } = req.body;
     if (!Array.isArray(trackIds) || trackIds.length === 0) {
         return res.status(400).json({ error: 'trackIds array required' });
     }
+
+    // Verify ownership
+    const playlist = db.prepare('SELECT user_id FROM playlists WHERE id = ?').get(id) as { user_id: number } | undefined;
+    if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
+    if (playlist.user_id !== req.user!.id) return res.status(403).json({ error: 'Access denied' });
 
     const maxPos = db.prepare('SELECT MAX(position) as max FROM playlist_tracks WHERE playlist_id = ?').get(id) as { max: number | null };
     let position = (maxPos?.max || 0);
@@ -942,20 +1207,31 @@ app.post('/api/playlists/:id/tracks/batch', (req: Request, res: Response) => {
 });
 
 // Remove track from playlist
-app.delete('/api/playlists/:id/tracks/:trackId', (req: Request, res: Response) => {
+app.delete('/api/playlists/:id/tracks/:trackId', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id, trackId } = req.params;
+
+    // Verify ownership
+    const playlist = db.prepare('SELECT user_id FROM playlists WHERE id = ?').get(id) as { user_id: number } | undefined;
+    if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
+    if (playlist.user_id !== req.user!.id) return res.status(403).json({ error: 'Access denied' });
+
     db.prepare('DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?').run(id, trackId);
     db.prepare('UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
     res.json({ success: true });
 });
 
 // Reorder track in playlist - Optimized
-app.put('/api/playlists/:id/tracks/reorder', (req: Request, res: Response) => {
+app.put('/api/playlists/:id/tracks/reorder', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { trackId, newPosition } = req.body;
     if (!trackId || newPosition === undefined) {
         return res.status(400).json({ error: 'trackId and newPosition required' });
     }
+
+    // Verify ownership
+    const playlist = db.prepare('SELECT user_id FROM playlists WHERE id = ?').get(id) as { user_id: number } | undefined;
+    if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
+    if (playlist.user_id !== req.user!.id) return res.status(403).json({ error: 'Access denied' });
 
     // Get current position
     const current = db.prepare('SELECT position FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?').get(id, trackId) as { position: number } | undefined;
@@ -970,40 +1246,86 @@ app.put('/api/playlists/:id/tracks/reorder', (req: Request, res: Response) => {
         }
 
         if (newPosition > oldPosition) {
-            // Moving down: shift tracks between old and new positions up
-            // Use CASE statement for atomic update
+            // Moving down: Shift items between old and new positions UP (decrement)
             db.prepare(`
-                UPDATE playlist_tracks
-                SET position = CASE
-                    WHEN position = ? THEN ?
-                    WHEN position > ? AND position <= ? THEN position - 1
-                    ELSE position
-                END
-                WHERE playlist_id = ? AND position >= ? AND position <= ?
-            `).run(oldPosition, newPosition, oldPosition, newPosition, id, oldPosition, newPosition);
+                UPDATE playlist_tracks 
+                SET position = position - 1 
+                WHERE playlist_id = @id 
+                AND position > @oldPos 
+                AND position <= @newPos
+            `).run({ id, oldPos: oldPosition, newPos: newPosition });
         } else {
-            // Moving up: shift tracks between new and old positions down
+            // Moving up: Shift items between new and old positions DOWN (increment)
             db.prepare(`
-                UPDATE playlist_tracks
-                SET position = CASE
-                    WHEN position = ? THEN ?
-                    WHEN position >= ? AND position < ? THEN position + 1
-                    ELSE position
-                END
-                WHERE playlist_id = ? AND position >= ? AND position <= ?
-            `).run(oldPosition, newPosition, newPosition, oldPosition, id, newPosition, oldPosition);
+                UPDATE playlist_tracks 
+                SET position = position + 1 
+                WHERE playlist_id = @id 
+                AND position >= @newPos 
+                AND position < @oldPos
+            `).run({ id, oldPos: oldPosition, newPos: newPosition });
         }
-        
+
+        // Set the new position for the target track
+        db.prepare(`
+            UPDATE playlist_tracks 
+            SET position = @newPos 
+            WHERE playlist_id = @id 
+            AND track_id = @trackId
+        `).run({ id, newPos: newPosition, trackId });
+
         db.prepare('UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
     });
-    txn();
 
+    try {
+        txn();
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Reorder error:', err);
+        res.status(500).json({ error: 'Failed to reorder' });
+    }
+});
+
+import { Playlist } from '../types';
+
+// ... other imports ...
+
+// Update playlist details
+app.put('/api/playlists/:id', auth.authenticateToken, (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const { name, description, pinned_to_home, cover_art_path } = req.body;
+
+    // Verify ownership
+    const playlist = db.prepare('SELECT user_id FROM playlists WHERE id = ?').get(id) as { user_id: number } | undefined;
+    if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
+    if (playlist.user_id !== req.user!.id) return res.status(403).json({ error: 'Access denied' });
+
+    const updates: string[] = [];
+    const params: any[] = [];
+
+    if (name !== undefined) { updates.push('name = ?'); params.push(name); }
+    if (description !== undefined) { updates.push('description = ?'); params.push(description); }
+    if (pinned_to_home !== undefined) { updates.push('pinned_to_home = ?'); params.push(pinned_to_home ? 1 : 0); }
+    if (cover_art_path !== undefined) { updates.push('cover_art_path = ?'); params.push(cover_art_path); }
+
+    if (updates.length === 0) return res.json({ success: true }); // Nothing to update
+
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    params.push(id);
+
+    db.prepare(`UPDATE playlists SET ${updates.join(', ')} WHERE id = ?`).run(...params);
     res.json({ success: true });
 });
 
+
 // Delete playlist
-app.delete('/api/playlists/:id', (req: Request, res: Response) => {
+app.delete('/api/playlists/:id', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id } = req.params;
+
+    // Verify ownership
+    const playlist = db.prepare('SELECT user_id FROM playlists WHERE id = ?').get(id) as { user_id: number } | undefined;
+    if (!playlist) return res.status(404).json({ error: 'Playlist not found' });
+    if (playlist.user_id !== req.user!.id) return res.status(403).json({ error: 'Access denied' });
+
     db.prepare('DELETE FROM playlists WHERE id = ?').run(id);
     res.json({ success: true });
 });
@@ -1033,16 +1355,16 @@ app.put('/api/playlists/:id', (req: Request, res: Response) => {
 // ========== PLAY HISTORY ENDPOINTS ==========
 
 // Record a play
-app.post('/api/history', (req: Request, res: Response) => {
+app.post('/api/history', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { trackId } = req.body;
     if (!trackId) return res.status(400).json({ error: 'trackId required' });
 
-    db.prepare('INSERT INTO listening_history (track_id) VALUES (?)').run(trackId);
+    db.prepare('INSERT INTO listening_history (track_id, user_id) VALUES (?, ?)').run(trackId, req.user!.id);
     res.json({ success: true });
 });
 
 // Get play history (paginated)
-app.get('/api/history', (req: Request, res: Response) => {
+app.get('/api/history', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const limit = parseInt(req.query.limit as string) || 50;
     const offset = parseInt(req.query.offset as string) || 0;
 
@@ -1050,9 +1372,10 @@ app.get('/api/history', (req: Request, res: Response) => {
         SELECT h.id, h.played_at, t.*
         FROM listening_history h
         JOIN tracks t ON h.track_id = t.id
+        WHERE h.user_id = ?
         ORDER BY h.played_at DESC
         LIMIT ? OFFSET ?
-    `).all(limit, offset);
+    `).all(req.user!.id, limit, offset);
 
     res.json(history);
 });
@@ -1143,8 +1466,8 @@ app.get('/api/home/albums/played', (req: Request, res: Response) => {
 
 // ========== ALBUM COLLECTIONS ENDPOINTS ==========
 
-// Get all collections - Optimized
-app.get('/api/collections', (_req: Request, res: Response) => {
+// Get all collections - Optimized (User's own + Shared)
+app.get('/api/collections', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     // Single query with JOIN to get collections and preview albums
     const collections = db.prepare(`
         SELECT
@@ -1153,6 +1476,8 @@ app.get('/api/collections', (_req: Request, res: Response) => {
             c.description,
             c.pinned_to_home,
             c.cover_art_path,
+            c.user_id,
+            c.is_shared,
             c.created_at,
             c.updated_at,
             COUNT(DISTINCT ca.id) as album_count,
@@ -1166,10 +1491,10 @@ app.get('/api/collections', (_req: Request, res: Response) => {
         FROM album_collections c
         LEFT JOIN collection_albums ca ON c.id = ca.collection_id
         LEFT JOIN tracks t ON t.album = ca.album_name AND t.artist = ca.artist_name AND t.has_art = 1
-        WHERE ca.position IS NULL OR ca.position <= 4
+        WHERE (c.user_id = ? OR c.is_shared = 1) AND (ca.position IS NULL OR ca.position <= 4)
         GROUP BY c.id
         ORDER BY c.updated_at DESC
-    `).all() as any[];
+    `).all(req.user!.id) as any[];
 
     // Parse the JSON preview albums
     const collectionsWithPreviews = collections.map(col => {
@@ -1181,13 +1506,15 @@ app.get('/api/collections', (_req: Request, res: Response) => {
                 preview_albums = [];
             }
         }
-        
+
         return {
             id: col.id,
             name: col.name,
             description: col.description,
             pinned_to_home: col.pinned_to_home,
             cover_art_path: col.cover_art_path,
+            user_id: col.user_id,
+            is_shared: col.is_shared,
             created_at: col.created_at,
             updated_at: col.updated_at,
             album_count: col.album_count,
@@ -1199,14 +1526,14 @@ app.get('/api/collections', (_req: Request, res: Response) => {
 });
 
 // Get collections pinned to homepage
-app.get('/api/collections/home', (_req: Request, res: Response) => {
+app.get('/api/collections/home', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const collections = db.prepare(`
         SELECT c.*,
                (SELECT COUNT(*) FROM collection_albums WHERE collection_id = c.id) as album_count
         FROM album_collections c 
-        WHERE c.pinned_to_home = 1 
+        WHERE c.pinned_to_home = 1 AND c.user_id = ?
         ORDER BY c.updated_at DESC
-    `).all() as any[];
+    `).all(req.user!.id) as any[];
 
     // Add preview albums (first 4) for each collection
     const collectionsWithPreviews = collections.map(col => {
@@ -1225,23 +1552,21 @@ app.get('/api/collections/home', (_req: Request, res: Response) => {
 });
 
 // Get collection with albums
-app.get('/api/collections/:id', (req: Request, res: Response) => {
+app.get('/api/collections/:id', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const collection = db.prepare('SELECT * FROM album_collections WHERE id = ?').get(id);
+    const collection = db.prepare('SELECT * FROM album_collections WHERE id = ?').get(id) as any;
+
     if (!collection) return res.status(404).json({ error: 'Collection not found' });
 
-    // Get albums in collection with their tracks
+    // Check access
+    if (collection.user_id !== req.user!.id && !collection.is_shared) {
+        return res.status(403).json({ error: 'Access denied' });
+    }
+
     const albums = db.prepare(`
-        SELECT ca.*, 
-               t.id as sample_track_id,
-               t.has_art
+        SELECT ca.*,
+               (SELECT id FROM tracks t WHERE t.album = ca.album_name AND t.artist = ca.artist_name AND t.has_art = 1 LIMIT 1) as sample_track_id
         FROM collection_albums ca
-        LEFT JOIN (
-            SELECT album, artist, id, has_art 
-            FROM tracks 
-            WHERE has_art = 1 
-            GROUP BY album, artist
-        ) t ON t.album = ca.album_name AND t.artist = ca.artist_name
         WHERE ca.collection_id = ?
         ORDER BY ca.position
     `).all(id);
@@ -1250,19 +1575,24 @@ app.get('/api/collections/:id', (req: Request, res: Response) => {
 });
 
 // Create collection
-app.post('/api/collections', (req: Request, res: Response) => {
-    const { name, description, pinned_to_home } = req.body;
+app.post('/api/collections', auth.authenticateToken, (req: AuthRequest, res: Response) => {
+    const { name, description, pinned_to_home, is_shared } = req.body;
     if (!name) return res.status(400).json({ error: 'Name required' });
 
-    const result = db.prepare('INSERT INTO album_collections (name, description, pinned_to_home) VALUES (?, ?, ?)')
-        .run(name, description || '', pinned_to_home ? 1 : 0);
-    res.json({ id: result.lastInsertRowid, name, description });
+    const result = db.prepare('INSERT INTO album_collections (name, description, pinned_to_home, user_id, is_shared) VALUES (?, ?, ?, ?, ?)')
+        .run(name, description || '', pinned_to_home ? 1 : 0, req.user!.id, is_shared ? 1 : 0);
+    res.json({ id: result.lastInsertRowid, name, description, user_id: req.user!.id, is_shared: is_shared ? 1 : 0 });
 });
 
 // Update collection
-app.put('/api/collections/:id', (req: Request, res: Response) => {
+app.put('/api/collections/:id', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { name, description, pinned_to_home, cover_art_path } = req.body;
+    const { name, description, pinned_to_home, cover_art_path, is_shared } = req.body;
+
+    // Verify ownership
+    const collection = db.prepare('SELECT user_id FROM album_collections WHERE id = ?').get(id) as { user_id: number } | undefined;
+    if (!collection) return res.status(404).json({ error: 'Collection not found' });
+    if (collection.user_id !== req.user!.id) return res.status(403).json({ error: 'Access denied' });
 
     const updates: string[] = [];
     const values: any[] = [];
@@ -1271,6 +1601,7 @@ app.put('/api/collections/:id', (req: Request, res: Response) => {
     if (description !== undefined) { updates.push('description = ?'); values.push(description); }
     if (pinned_to_home !== undefined) { updates.push('pinned_to_home = ?'); values.push(pinned_to_home ? 1 : 0); }
     if (cover_art_path !== undefined) { updates.push('cover_art_path = ?'); values.push(cover_art_path); }
+    if (is_shared !== undefined) { updates.push('is_shared = ?'); values.push(is_shared ? 1 : 0); }
 
     if (updates.length === 0) return res.json({ success: true });
 
@@ -1282,17 +1613,28 @@ app.put('/api/collections/:id', (req: Request, res: Response) => {
 });
 
 // Delete collection
-app.delete('/api/collections/:id', (req: Request, res: Response) => {
+app.delete('/api/collections/:id', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id } = req.params;
+
+    // Verify ownership
+    const collection = db.prepare('SELECT user_id FROM album_collections WHERE id = ?').get(id) as { user_id: number } | undefined;
+    if (!collection) return res.status(404).json({ error: 'Collection not found' });
+    if (collection.user_id !== req.user!.id) return res.status(403).json({ error: 'Access denied' });
+
     db.prepare('DELETE FROM album_collections WHERE id = ?').run(id);
     res.json({ success: true });
 });
 
 // Add album to collection
-app.post('/api/collections/:id/albums', (req: Request, res: Response) => {
+app.post('/api/collections/:id/albums', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const { albumName, artistName } = req.body;
     if (!albumName || !artistName) return res.status(400).json({ error: 'albumName and artistName required' });
+
+    // Verify ownership
+    const collection = db.prepare('SELECT user_id FROM album_collections WHERE id = ?').get(id) as { user_id: number } | undefined;
+    if (!collection) return res.status(404).json({ error: 'Collection not found' });
+    if (collection.user_id !== req.user!.id) return res.status(403).json({ error: 'Access denied' });
 
     // Get next position
     const maxPos = db.prepare('SELECT MAX(position) as max FROM collection_albums WHERE collection_id = ?').get(id) as { max: number | null };
@@ -1313,8 +1655,14 @@ app.post('/api/collections/:id/albums', (req: Request, res: Response) => {
 });
 
 // Remove album from collection
-app.delete('/api/collections/:id/albums/:albumId', (req: Request, res: Response) => {
+app.delete('/api/collections/:id/albums/:albumId', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id, albumId } = req.params;
+
+    // Verify ownership
+    const collection = db.prepare('SELECT user_id FROM album_collections WHERE id = ?').get(id) as { user_id: number } | undefined;
+    if (!collection) return res.status(404).json({ error: 'Collection not found' });
+    if (collection.user_id !== req.user!.id) return res.status(403).json({ error: 'Access denied' });
+
     db.prepare('DELETE FROM collection_albums WHERE collection_id = ? AND id = ?').run(id, albumId);
     db.prepare('UPDATE album_collections SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
     res.json({ success: true });
@@ -1358,7 +1706,7 @@ app.get('/api/labels', (req: Request, res: Response) => {
                 preview_albums = [];
             }
         }
-        
+
         return {
             id: label.id,
             name: label.name,

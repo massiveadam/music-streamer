@@ -84,11 +84,17 @@ export interface Tag {
     count: number;
 }
 
+
 export interface Playlist {
     id: number;
     name: string;
     description?: string;
     is_featured: number;
+    pinned_to_home?: number;
+    cover_art_path?: string;
+    user_id?: number;
+    type?: string;
+    rules?: string;
     created_at: string;
     updated_at: string;
 }
@@ -104,7 +110,29 @@ export interface PlaylistTrack {
 export interface ListeningHistoryEntry {
     id: number;
     track_id: number;
+    user_id?: number;
     played_at: string;
+}
+
+export interface AlbumCollection {
+    id: number;
+    name: string;
+    description?: string;
+    pinned_to_home: number;
+    cover_art_path?: string;
+    user_id?: number;
+    is_shared: number;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface CollectionAlbum {
+    id: number;
+    collection_id: number;
+    album_name: string;
+    artist_name: string;
+    position: number;
+    added_at: string;
 }
 
 export interface AlbumImage {

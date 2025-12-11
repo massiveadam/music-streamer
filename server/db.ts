@@ -9,6 +9,26 @@ const db: DatabaseType = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
 
+// ===== USERS TABLE (must be created first for foreign keys) =====
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    display_name TEXT,
+    is_admin INTEGER DEFAULT 0,
+    eq_preset TEXT,
+    theme TEXT DEFAULT 'dark',
+    lastfm_session_key TEXT,
+    lastfm_username TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+// Migration for existing tables
+addColumn('users', 'lastfm_session_key', 'TEXT');
+addColumn('users', 'lastfm_username', 'TEXT');
+
 // Initialize DB safely
 db.exec(`
   CREATE TABLE IF NOT EXISTS tracks (
@@ -283,6 +303,39 @@ db.exec(`
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_collection_albums_collection ON collection_albums(collection_id)`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_collections_pinned ON album_collections(pinned_to_home)`);
+
+// ===== MULTI-USER SUPPORT =====
+// Add user_id to per-user tables
+addColumn('playlists', 'user_id', 'INTEGER');
+addColumn('listening_history', 'user_id', 'INTEGER');
+addColumn('album_collections', 'user_id', 'INTEGER');
+addColumn('album_collections', 'is_shared', 'INTEGER DEFAULT 0');
+
+// Indexes for user queries
+try {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_playlists_user ON playlists(user_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_listening_history_user ON listening_history(user_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_collections_user ON album_collections(user_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`);
+} catch (e) { /* Indexes may exist */ }
+
+// ===== SYSTEM SETTINGS =====
+db.exec(`
+  CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )
+`);
+
+// Helper to get/set settings
+export const getSetting = (key: string): string | undefined => {
+  const res = db.prepare('SELECT value FROM system_settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return res?.value;
+};
+
+export const setSetting = (key: string, value: string): void => {
+  db.prepare('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)').run(key, value);
+};
 
 // Export typed database instance
 export default db;

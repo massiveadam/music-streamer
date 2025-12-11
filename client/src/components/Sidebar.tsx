@@ -1,4 +1,5 @@
-import { Home, Library, ListMusic, Settings, RefreshCw } from 'lucide-react';
+import { Home, Library, ListMusic, Settings, RefreshCw, LogOut } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 type MainTab = 'home' | 'library' | 'playlists' | 'settings';
 
@@ -12,6 +13,8 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ mainTab, setMainTab, backgroundStatus }: SidebarProps) {
+    const { logout } = useAuth();
+
     return (
         <div className="w-16 bg-app-bg border-r border-app-surface flex flex-col items-center py-6 gap-6 shrink-0">
             <button
@@ -55,6 +58,13 @@ export default function Sidebar({ mainTab, setMainTab, backgroundStatus }: Sideb
                 title="Settings"
             >
                 <Settings size={22} />
+            </button>
+            <button
+                onClick={logout}
+                className="p-3 rounded-xl transition-all border border-transparent text-app-text-muted hover:text-red-400 hover:bg-red-500/10"
+                title="Logout"
+            >
+                <LogOut size={22} />
             </button>
         </div>
     );
