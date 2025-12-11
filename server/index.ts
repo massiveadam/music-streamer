@@ -336,31 +336,62 @@ app.get('/api/stream/:id', (req: Request, res: Response) => {
     }
 });
 
-// 7. Search Endpoint
+// 7. Search Endpoint (Optimized)
 app.get('/api/search', (req: Request, res: Response) => {
     try {
         const { q } = req.query;
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = Math.min(parseInt(req.query.limit as string) || 50, 100); // Cap at 100
+        const offset = (page - 1) * limit;
+
         if (!q || (q as string).trim().length === 0) {
             return res.status(400).json({ error: 'Search query parameter is required' });
         }
 
         const query = `%${(q as string).trim()}%`;
+        
+        // Optimized search with UNION to avoid LEFT JOIN performance issues
         const sql = `
-      SELECT DISTINCT t.*
-      FROM tracks t
-      LEFT JOIN credits c ON c.track_id = t.id
-      WHERE t.title LIKE ?
-         OR t.artist LIKE ?
-         OR t.album LIKE ?
-         OR t.genre LIKE ?
-         OR t.mood LIKE ?
-         OR c.name LIKE ?
-      ORDER BY t.artist, t.album
-      LIMIT 100
-    `;
+            SELECT DISTINCT t.*
+            FROM tracks t
+            WHERE t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ? OR t.genre LIKE ? OR t.mood LIKE ?
+            UNION
+            SELECT DISTINCT t.*
+            FROM tracks t
+            JOIN credits c ON c.track_id = t.id
+            WHERE c.name LIKE ?
+            ORDER BY artist, album, title
+            LIMIT ? OFFSET ?
+        `;
 
-        const results = db.prepare(sql).all(query, query, query, query, query, query) as Track[];
-        res.json(results);
+        const results = db.prepare(sql).all(query, query, query, query, query, query, limit, offset) as Track[];
+        
+        // Get total count for pagination
+        const countSql = `
+            SELECT COUNT(*) as total FROM (
+                SELECT DISTINCT t.id
+                FROM tracks t
+                WHERE t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ? OR t.genre LIKE ? OR t.mood LIKE ?
+                UNION
+                SELECT DISTINCT t.id
+                FROM tracks t
+                JOIN credits c ON c.track_id = t.id
+                WHERE c.name LIKE ?
+            )
+        `;
+        
+        const totalResult = db.prepare(countSql).get(query, query, query, query, query, query) as { total: number };
+        const total = totalResult.total;
+
+        res.json({
+            results,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit)
+            }
+        });
     } catch (err) {
         console.error('Search endpoint error:', err);
         res.status(500).json({ error: 'Database error during search' });
@@ -422,7 +453,7 @@ app.post('/api/enrich/fast', async (req: Request, res: Response) => {
     res.json({ message: `Fast album-based enrichment started with ${workerCount} workers` });
 });
 
-// 10b. Bulk enrich artist bios (Wikipedia + Last.fm)
+// 10b. Bulk enrich artist bios (Wikipedia + Last.fm) - Optimized
 app.post('/api/enrich/artists', async (_req: Request, res: Response) => {
     try {
         // Get all artists without descriptions
@@ -436,34 +467,59 @@ app.post('/api/enrich/artists', async (_req: Request, res: Response) => {
 
         let enriched = 0;
         let errors = 0;
+        const batchSize = 5; // Process 5 artists at a time
+        const delayBetweenBatches = 2000; // 2 seconds between batches
 
-        for (const artist of artists) {
-            try {
-                // Try Last.fm first
-                if (process.env.LASTFM_API_KEY) {
-                    const info = await lastfm.getArtistInfo(artist.name);
-                    if (info && (info.description || info.image)) {
-                        db.prepare('UPDATE artists SET description = ?, image_path = ? WHERE id = ?')
-                            .run(info.description, info.image, artist.id);
-                        enriched++;
-                        continue;
+        // Process artists in batches to avoid overwhelming APIs
+        for (let i = 0; i < artists.length; i += batchSize) {
+            const batch = artists.slice(i, i + batchSize);
+            
+            const promises = batch.map(async (artist) => {
+                try {
+                    // Try Last.fm first
+                    if (process.env.LASTFM_API_KEY) {
+                        const info = await lastfm.getArtistInfo(artist.name);
+                        if (info && (info.description || info.image)) {
+                            db.prepare('UPDATE artists SET description = ?, image_path = ? WHERE id = ?')
+                                .run(info.description, info.image, artist.id);
+                            return { success: true, artist: artist.name };
+                        }
                     }
-                }
 
-                // Fallback to Wikipedia
-                const wikiResult = await wikipedia.getArtistBio(artist.name);
-                if (wikiResult && wikiResult.bio) {
-                    db.prepare('UPDATE artists SET description = ?, wiki_url = ? WHERE id = ?')
-                        .run(wikiResult.bio, wikiResult.url, artist.id);
-                    enriched++;
+                    // Fallback to Wikipedia
+                    const wikiResult = await wikipedia.getArtistBio(artist.name);
+                    if (wikiResult && wikiResult.bio) {
+                        db.prepare('UPDATE artists SET description = ?, wiki_url = ? WHERE id = ?')
+                            .run(wikiResult.bio, wikiResult.url, artist.id);
+                        return { success: true, artist: artist.name };
+                    }
+                    
+                    return { success: false, artist: artist.name, reason: 'No data found' };
+                } catch (e) {
+                    console.error(`Failed to enrich ${artist.name}:`, (e as Error).message);
+                    return { success: false, artist: artist.name, error: (e as Error).message };
                 }
-            } catch (e) {
-                console.error(`Failed to enrich ${artist.name}:`, (e as Error).message);
-                errors++;
+            });
+
+            const results = await Promise.allSettled(promises);
+            
+            // Process results
+            results.forEach(result => {
+                if (result.status === 'fulfilled') {
+                    if (result.value.success) {
+                        enriched++;
+                    } else {
+                        errors++;
+                    }
+                } else {
+                    errors++;
+                }
+            });
+
+            // Rate limiting - wait between batches
+            if (i + batchSize < artists.length) {
+                await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
             }
-
-            // Rate limiting - wait 1 second between requests
-            await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
         res.json({
@@ -893,7 +949,7 @@ app.delete('/api/playlists/:id/tracks/:trackId', (req: Request, res: Response) =
     res.json({ success: true });
 });
 
-// Reorder track in playlist
+// Reorder track in playlist - Optimized
 app.put('/api/playlists/:id/tracks/reorder', (req: Request, res: Response) => {
     const { id } = req.params;
     const { trackId, newPosition } = req.body;
@@ -907,20 +963,37 @@ app.put('/api/playlists/:id/tracks/reorder', (req: Request, res: Response) => {
 
     const oldPosition = current.position;
 
-    // Shift other tracks
+    // Optimized single-transaction approach
     const txn = db.transaction(() => {
+        if (newPosition === oldPosition) {
+            return; // No change needed
+        }
+
         if (newPosition > oldPosition) {
             // Moving down: shift tracks between old and new positions up
-            db.prepare('UPDATE playlist_tracks SET position = position - 1 WHERE playlist_id = ? AND position > ? AND position <= ?')
-                .run(id, oldPosition, newPosition);
+            // Use CASE statement for atomic update
+            db.prepare(`
+                UPDATE playlist_tracks
+                SET position = CASE
+                    WHEN position = ? THEN ?
+                    WHEN position > ? AND position <= ? THEN position - 1
+                    ELSE position
+                END
+                WHERE playlist_id = ? AND position >= ? AND position <= ?
+            `).run(oldPosition, newPosition, oldPosition, newPosition, id, oldPosition, newPosition);
         } else {
-            // Moving up: shift tracks between new and old positions down  
-            db.prepare('UPDATE playlist_tracks SET position = position + 1 WHERE playlist_id = ? AND position >= ? AND position < ?')
-                .run(id, newPosition, oldPosition);
+            // Moving up: shift tracks between new and old positions down
+            db.prepare(`
+                UPDATE playlist_tracks
+                SET position = CASE
+                    WHEN position = ? THEN ?
+                    WHEN position >= ? AND position < ? THEN position + 1
+                    ELSE position
+                END
+                WHERE playlist_id = ? AND position >= ? AND position <= ?
+            `).run(oldPosition, newPosition, newPosition, oldPosition, id, newPosition, oldPosition);
         }
-        // Set new position for target track
-        db.prepare('UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?')
-            .run(newPosition, id, trackId);
+        
         db.prepare('UPDATE playlists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
     });
     txn();
@@ -986,12 +1059,14 @@ app.get('/api/history', (req: Request, res: Response) => {
 
 // ========== HOMEPAGE DATA ENDPOINTS ==========
 
-// Get recently added albums (grouped by album)
+// Get recently added albums (grouped by album) - With Pagination
 app.get('/api/home/albums/recent', (req: Request, res: Response) => {
-    const limit = parseInt(req.query.limit as string) || 20;
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    const offset = (page - 1) * limit;
 
     const albums = db.prepare(`
-        SELECT 
+        SELECT
             album,
             artist,
             MIN(id) as sample_track_id,
@@ -1003,18 +1078,35 @@ app.get('/api/home/albums/recent', (req: Request, res: Response) => {
         WHERE album IS NOT NULL AND album != ''
         GROUP BY artist, album
         ORDER BY MAX(added_at) DESC, MAX(id) DESC
-        LIMIT ?
-    `).all(limit);
+        LIMIT ? OFFSET ?
+    `).all(limit, offset);
 
-    res.json(albums);
+    // Get total count for pagination
+    const totalResult = db.prepare(`
+        SELECT COUNT(DISTINCT artist, album) as total
+        FROM tracks
+        WHERE album IS NOT NULL AND album != ''
+    `).get() as { total: number };
+
+    res.json({
+        albums,
+        pagination: {
+            page,
+            limit,
+            total: totalResult.total,
+            totalPages: Math.ceil(totalResult.total / limit)
+        }
+    });
 });
 
-// Get recently played albums (grouped by album)
+// Get recently played albums (grouped by album) - With Pagination
 app.get('/api/home/albums/played', (req: Request, res: Response) => {
-    const limit = parseInt(req.query.limit as string) || 20;
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    const offset = (page - 1) * limit;
 
     const albums = db.prepare(`
-        SELECT 
+        SELECT
             t.album,
             t.artist,
             MIN(t.id) as sample_track_id,
@@ -1027,34 +1119,80 @@ app.get('/api/home/albums/played', (req: Request, res: Response) => {
         WHERE t.album IS NOT NULL AND t.album != ''
         GROUP BY t.artist, t.album
         ORDER BY MAX(h.played_at) DESC
-        LIMIT ?
-    `).all(limit);
+        LIMIT ? OFFSET ?
+    `).all(limit, offset);
 
-    res.json(albums);
+    // Get total count for pagination
+    const totalResult = db.prepare(`
+        SELECT COUNT(DISTINCT t.artist, t.album) as total
+        FROM listening_history h
+        JOIN tracks t ON h.track_id = t.id
+        WHERE t.album IS NOT NULL AND t.album != ''
+    `).get() as { total: number };
+
+    res.json({
+        albums,
+        pagination: {
+            page,
+            limit,
+            total: totalResult.total,
+            totalPages: Math.ceil(totalResult.total / limit)
+        }
+    });
 });
 
 // ========== ALBUM COLLECTIONS ENDPOINTS ==========
 
-// Get all collections
+// Get all collections - Optimized
 app.get('/api/collections', (_req: Request, res: Response) => {
+    // Single query with JOIN to get collections and preview albums
     const collections = db.prepare(`
-        SELECT c.*, 
-               (SELECT COUNT(*) FROM collection_albums WHERE collection_id = c.id) as album_count
-        FROM album_collections c 
+        SELECT
+            c.id,
+            c.name,
+            c.description,
+            c.pinned_to_home,
+            c.cover_art_path,
+            c.created_at,
+            c.updated_at,
+            COUNT(DISTINCT ca.id) as album_count,
+            GROUP_CONCAT(
+                JSON_OBJECT(
+                    'album_name', ca.album_name,
+                    'artist_name', ca.artist_name,
+                    'sample_track_id', t.id
+                )
+            ) as preview_albums_json
+        FROM album_collections c
+        LEFT JOIN collection_albums ca ON c.id = ca.collection_id
+        LEFT JOIN tracks t ON t.album = ca.album_name AND t.artist = ca.artist_name AND t.has_art = 1
+        WHERE ca.position IS NULL OR ca.position <= 4
+        GROUP BY c.id
         ORDER BY c.updated_at DESC
     `).all() as any[];
 
-    // Add preview albums (first 4) for each collection
+    // Parse the JSON preview albums
     const collectionsWithPreviews = collections.map(col => {
-        const previewAlbums = db.prepare(`
-            SELECT ca.album_name, ca.artist_name,
-                   (SELECT id FROM tracks t WHERE t.album = ca.album_name AND t.artist = ca.artist_name AND t.has_art = 1 LIMIT 1) as sample_track_id
-            FROM collection_albums ca
-            WHERE ca.collection_id = ?
-            ORDER BY ca.position
-            LIMIT 4
-        `).all(col.id);
-        return { ...col, preview_albums: previewAlbums };
+        let preview_albums = [];
+        if (col.preview_albums_json) {
+            try {
+                preview_albums = JSON.parse(`[${col.preview_albums_json}]`);
+            } catch (e) {
+                preview_albums = [];
+            }
+        }
+        
+        return {
+            id: col.id,
+            name: col.name,
+            description: col.description,
+            pinned_to_home: col.pinned_to_home,
+            cover_art_path: col.cover_art_path,
+            created_at: col.created_at,
+            updated_at: col.updated_at,
+            album_count: col.album_count,
+            preview_albums
+        };
     });
 
     res.json(collectionsWithPreviews);
@@ -1184,33 +1322,74 @@ app.delete('/api/collections/:id/albums/:albumId', (req: Request, res: Response)
 
 // ==================== LABELS API ====================
 
-// Get all labels with album count and preview albums
-app.get('/api/labels', (_req: Request, res: Response) => {
+// Get all labels with album count and preview albums - With Pagination
+app.get('/api/labels', (req: Request, res: Response) => {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const offset = (page - 1) * limit;
+
     const labels = db.prepare(`
         SELECT l.id, l.name, l.mbid, l.type, l.country, l.founded,
-               COUNT(DISTINCT r.id) as album_count
+               COUNT(DISTINCT r.id) as album_count,
+               GROUP_CONCAT(
+                   JSON_OBJECT(
+                       'album_name', r.title,
+                       'artist_name', r.artist_credit,
+                       'sample_track_id', t.id
+                   )
+               ) as preview_albums_json
         FROM labels l
         LEFT JOIN releases r ON r.label_mbid = l.mbid
+        LEFT JOIN tracks t ON t.release_mbid = r.mbid AND t.has_art = 1
         WHERE l.name IS NOT NULL AND l.name != '' AND l.name != '[no label]'
         GROUP BY l.id
         HAVING album_count > 0
         ORDER BY album_count DESC
-    `).all() as any[];
+        LIMIT ? OFFSET ?
+    `).all(limit, offset) as any[];
 
-    // Add preview albums (first 4) for each label
+    // Parse the JSON preview albums
     const labelsWithPreviews = labels.map(label => {
-        const previewAlbums = db.prepare(`
-            SELECT DISTINCT r.title as album_name, r.artist_credit as artist_name,
-                   (SELECT id FROM tracks t WHERE t.release_mbid = r.mbid AND t.has_art = 1 LIMIT 1) as sample_track_id
-            FROM releases r
-            WHERE r.label_mbid = ?
-            ORDER BY r.release_date DESC
-            LIMIT 4
-        `).all(label.mbid);
-        return { ...label, preview_albums: previewAlbums };
+        let preview_albums = [];
+        if (label.preview_albums_json) {
+            try {
+                preview_albums = JSON.parse(`[${label.preview_albums_json}]`);
+            } catch (e) {
+                preview_albums = [];
+            }
+        }
+        
+        return {
+            id: label.id,
+            name: label.name,
+            mbid: label.mbid,
+            type: label.type,
+            country: label.country,
+            founded: label.founded,
+            album_count: label.album_count,
+            preview_albums
+        };
     });
 
-    res.json(labelsWithPreviews);
+    // Get total count for pagination
+    const totalResult = db.prepare(`
+        SELECT COUNT(DISTINCT l.id) as total
+        FROM labels l
+        LEFT JOIN releases r ON r.label_mbid = l.mbid
+        WHERE l.name IS NOT NULL AND l.name != '' AND l.name != '[no label]'
+        GROUP BY l.id
+        HAVING COUNT(DISTINCT r.id) > 0
+    `).get() as { total: number };
+
+    res.json({
+        labels: labelsWithPreviews,
+        pagination: {
+            page,
+            limit,
+            total: totalResult.total,
+            totalPages: Math.ceil(totalResult.total / limit)
+        }
+    });
 });
 
 // Get single label with all albums

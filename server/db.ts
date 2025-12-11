@@ -24,6 +24,7 @@ db.exec(`
 
 // Create Indexes for Performance
 db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tracks_path ON tracks(path);
     CREATE INDEX IF NOT EXISTS idx_tracks_release_mbid ON tracks(release_mbid);
     CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
     CREATE INDEX IF NOT EXISTS idx_tracks_artist_album ON tracks(artist, album);
@@ -31,14 +32,27 @@ db.exec(`
     CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
     CREATE INDEX IF NOT EXISTS idx_tracks_genre ON tracks(genre);
     CREATE INDEX IF NOT EXISTS idx_tracks_mood ON tracks(mood);
+    CREATE INDEX IF NOT EXISTS idx_tracks_rating ON tracks(rating);
+    CREATE INDEX IF NOT EXISTS idx_tracks_added_at ON tracks(added_at);
     CREATE INDEX IF NOT EXISTS idx_releases_label_mbid ON releases(label_mbid);
     CREATE INDEX IF NOT EXISTS idx_credits_artist_mbid ON credits(artist_mbid);
     CREATE INDEX IF NOT EXISTS idx_credits_track_id ON credits(track_id);
     CREATE INDEX IF NOT EXISTS idx_credits_track_role ON credits(track_id, role);
     CREATE INDEX IF NOT EXISTS idx_credits_name ON credits(name);
     CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name);
+    CREATE INDEX IF NOT EXISTS idx_artists_mbid ON artists(mbid);
     CREATE INDEX IF NOT EXISTS idx_tracks_mbid ON tracks(mbid);
+    CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist_position ON playlist_tracks(playlist_id, position);
+    CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track_id ON playlist_tracks(track_id);
+    CREATE INDEX IF NOT EXISTS idx_collection_albums_collection_position ON collection_albums(collection_id, position);
+    CREATE INDEX IF NOT EXISTS idx_listening_history_track_id ON listening_history(track_id);
+    CREATE INDEX IF NOT EXISTS idx_entity_tags_entity_lookup ON entity_tags(entity_type, entity_id, tag_id);
 `);
+
+// Performance optimization pragmas
+db.pragma('cache_size = -64000'); // 64MB cache
+db.pragma('temp_store = memory'); // Store temp tables in memory
+db.pragma('mmap_size = 268435456'); // 256MB memory mapping
 
 // Migration helper
 function addColumn(table: string, column: string, type: string): void {

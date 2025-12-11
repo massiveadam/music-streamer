@@ -716,7 +716,7 @@ export function NowPlaying({
                                     <span className="text-xs text-gray-500 w-6">{i + 1}</span>
                                     <div className="w-10 h-10 bg-gray-800 rounded overflow-hidden">
                                         {track.has_art ? (
-                                            <img src={`${serverUrl}/api/art/${track.id}`} alt="" className="w-full h-full object-cover" />
+                                            <img loading="lazy" decoding="async" src={`${serverUrl}/api/art/${track.id}`} alt="" className="w-full h-full object-cover" />
                                         ) : (
                                             <div className="w-full h-full flex items-center justify-center">
                                                 <Disc size={16} className="text-gray-600" />
