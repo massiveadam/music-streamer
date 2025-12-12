@@ -35,7 +35,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
 
             // Validate token and fetch user
-            axios.get(`${SERVER_URL}/api/auth/me`)
+            axios.get(`${SERVER_URL}/api/auth/me`, { timeout: 5000 })
                 .then(res => {
                     setUser(res.data);
                 })

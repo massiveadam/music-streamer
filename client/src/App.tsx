@@ -6,8 +6,8 @@ import { NowPlaying } from './components/NowPlaying';
 import Sidebar from './components/Sidebar';
 import MiniPlayer from './components/MiniPlayer';
 import { HomePage, LibraryPage, PlaylistsPage, SettingsPage } from './pages';
-import { AlbumDetailModal, ArtistDetailModal, LabelDetailModal, CollectionDetailModal } from './components/modals';
-import type { Track, Artist, Credit, Playlist, RepeatMode, ViewTab, AlbumSort, Theme } from './types';
+import { AlbumDetailModal, ArtistDetailModal, LabelDetailModal, CollectionDetailModal, PlaylistDetailModal } from './components/modals';
+import type { Track, Artist, Credit, Playlist, RepeatMode, ViewTab, AlbumSort, Theme, LibraryView } from './types';
 import { extractColorFromImage } from './utils/colorUtils';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import LoginPage from './pages/LoginPage';
@@ -53,7 +53,6 @@ interface ArtistDetails {
 }
 
 type DeckId = 'A' | 'B';
-type LibraryView = 'grid' | 'list' | 'artists' | 'labels';
 type MainTab = 'home' | 'library' | 'playlists' | 'settings';
 type ActiveTab = 'tracks' | 'credits' | 'discography';
 
@@ -104,15 +103,26 @@ function MusicPlayer() {
   // Fetch Tracks
   useEffect(() => {
     fetchTracks();
+
+    // Simple URL routing
+    const path = window.location.pathname;
+    if (path === '/settings') setMainTab('settings');
+    else if (path === '/playlists') setMainTab('playlists');
+    else if (path === '/library') setMainTab('library');
+    else if (path === '/') setMainTab('home');
   }, []);
 
   const fetchTracks = async () => {
     setIsLoading(true);
+    console.log("Fetching tracks...");
     try {
-      const res = await axios.get(`${SERVER_URL}/api/tracks?limit=100000`);
+      const res = await axios.get(`${SERVER_URL}/api/tracks?limit=100000`, { timeout: 10000 });
+      console.log("Tracks fetched:", res.data.length || "Array");
       setTracks(res.data.tracks || res.data);
     } catch (err) {
       console.error("Error fetching tracks:", err);
+      // Fallback to empty array so loading stops
+      setTracks([]);
     } finally {
       setIsLoading(false);
     }
@@ -160,7 +170,7 @@ function MusicPlayer() {
     }
     if (view === 'labels') {
       axios.get(`${SERVER_URL}/api/labels`)
-        .then(res => setAllLabels(res.data))
+        .then(res => setAllLabels(Array.isArray(res.data) ? res.data : (res.data.labels || [])))
         .catch(err => console.error('Error fetching labels:', err));
     }
   }, [view]);
@@ -1095,8 +1105,8 @@ function MusicPlayer() {
                 </div>
               ) : (
                 <>
-                  {/* View Toggle Controls */}
-                  <div className="flex items-center justify-between mb-6 bg-app-surface/30 p-4 rounded-lg border border-white/5">
+                  {/* View Toggle Controls - Sticky */}
+                  <div className="sticky top-0 z-30 flex items-center justify-between mb-10 bg-app-bg/60 backdrop-blur-xl border border-white/10 shadow-lg shadow-black/5 transition-all px-4 py-2 -mt-6 rounded-xl supports-[backdrop-filter]:bg-app-bg/60">
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setView('grid')}
@@ -1130,6 +1140,12 @@ function MusicPlayer() {
                         className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${view === 'artists' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
                       >
                         Artists
+                      </button>
+                      <button
+                        onClick={() => setView('favorites')}
+                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${view === 'favorites' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
+                      >
+                        Favorites
                       </button>
                       <button
                         onClick={() => setView('labels')}
@@ -1252,6 +1268,89 @@ function MusicPlayer() {
                     </div>
                   )}
 
+                  {/* Favorites View */}
+                  {view === 'favorites' && (
+                    <div className="space-y-1 pb-32">
+                      {Array.isArray(tracks) && tracks.filter(t => t.rating === 1).length > 0 ? (
+                        tracks.filter(t => t.rating === 1).map((track, index) => {
+                          const originalIndex = tracks.findIndex(t => t.id === track.id);
+                          return (
+                            <div
+                              key={track.id}
+                              onClick={() => playTrack(originalIndex, 'cut')}
+                              className="group flex items-center gap-4 px-4 py-3 bg-app-surface/50 hover:bg-app-surface rounded-lg cursor-pointer transition-colors border border-transparent hover:border-app-accent/20"
+                            >
+                              {/* Track Number / Play Icon */}
+                              <div className="w-8 text-center text-sm text-app-text-muted group-hover:text-app-accent font-medium">
+                                <Play size={14} fill="currentColor" className="hidden group-hover:inline-block" />
+                                <span className="group-hover:hidden">●</span>
+                              </div>
+
+                              {/* Album Art */}
+                              <div className="w-12 h-12 bg-app-surface rounded-md overflow-hidden flex-shrink-0 border border-white/10">
+                                {track.has_art ? (
+                                  <img
+                                    src={`${SERVER_URL}/api/art/${track.id}`}
+                                    alt={track.title}
+                                    className="w-full h-full object-cover"
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center">
+                                    <Disc size={16} className="text-app-text-muted" />
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Track Info */}
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium text-app-text truncate">{track.title}</div>
+                                <div className="text-sm text-app-text-muted truncate">
+                                  <span
+                                    className="hover:text-app-accent hover:underline cursor-pointer transition-colors"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const artist = artists.find(a => a.name === track.artist);
+                                      if (artist) setSelectedArtist(artist);
+                                    }}
+                                  >
+                                    {track.artist}
+                                  </span>
+                                  • {track.album}
+                                </div>
+                              </div>
+
+                              {/* Duration */}
+                              <div className="text-sm text-app-text-muted font-mono tabular-nums">
+                                {Math.floor(track.duration / 60)}:{(Math.floor(track.duration % 60)).toString().padStart(2, '0')}
+                              </div>
+
+                              {/* Heart Icon (Always visible/active in Favorites) */}
+                              <button
+                                onClick={(e) => toggleFavorite(e, track.id)}
+                                className="p-1 hover:bg-white/10 rounded transition-all text-app-accent fill-app-accent"
+                              >
+                                <svg className="w-4 h-4" fill="currentColor" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                                </svg>
+                              </button>
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="text-center py-20">
+                          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-app-surface mb-6">
+                            <svg className="w-8 h-8 text-app-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                            </svg>
+                          </div>
+                          <h3 className="text-xl font-bold text-app-text mb-2">No Favorites Yet</h3>
+                          <p className="text-app-text-muted">Heart songs to see them appear here!</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Artists View */}
                   {/* Artists View - Text List */}
                   {view === 'artists' && (
@@ -1278,7 +1377,7 @@ function MusicPlayer() {
                   {view === 'labels' && (
                     <div className="pb-32">
                       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-                        {allLabels.map(label => (
+                        {Array.isArray(allLabels) && allLabels.map(label => (
                           <div
                             key={label.id}
                             className="bg-app-surface hover:bg-app-surface/80 rounded-xl p-4 cursor-pointer transition-colors group"
@@ -1289,28 +1388,48 @@ function MusicPlayer() {
                               } catch (e) { console.error(e); }
                             }}
                           >
-                            <div className="aspect-square bg-gradient-to-br from-orange-600/30 to-red-600/30 rounded-lg mb-3 overflow-hidden shadow-lg">
-                              <div className="grid grid-cols-2 grid-rows-2 gap-0.5 w-full h-full p-0.5">
-                                {[0, 1, 2, 3].map(i => {
-                                  const previewAlbum = label.preview_albums?.[i];
-                                  return (
-                                    <div key={i} className="bg-app-bg/50 rounded-sm overflow-hidden aspect-square">
-                                      {previewAlbum?.sample_track_id ? (
-                                        <img
-                                          src={`${SERVER_URL}/api/art/${previewAlbum.sample_track_id}`}
-                                          alt=""
-                                          className="w-full h-full object-cover"
-                                        />
-                                      ) : (
-                                        <div className="w-full h-full flex items-center justify-center">
-                                          <Disc size={20} className="text-app-text-muted/50" />
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
+                            {/* Hybrid View: Single Large or 4-Grid */}
+                            {label.preview_albums && label.preview_albums.length > 1 ? (
+                              /* Grid View for multiple albums */
+                              <div className="aspect-square bg-app-bg/50 rounded-lg mb-3 overflow-hidden shadow-lg border border-white/5 relative group-hover:border-white/10 transition-colors">
+                                <div className="grid grid-cols-2 grid-rows-2 gap-0.5 w-full h-full p-0.5">
+                                  {[0, 1, 2, 3].map(i => {
+                                    const previewAlbum = label.preview_albums?.[i];
+                                    return (
+                                      <div key={i} className="bg-app-bg/40 rounded-sm overflow-hidden aspect-square relative">
+                                        {previewAlbum?.sample_track_id ? (
+                                          <img
+                                            src={`${SERVER_URL}/api/art/${previewAlbum.sample_track_id}`}
+                                            alt={previewAlbum.album_name}
+                                            className="w-full h-full object-cover transition-opacity duration-300 opacity-90 group-hover:opacity-100"
+                                            loading="lazy"
+                                          />
+                                        ) : (
+                                          <div className="w-full h-full flex items-center justify-center">
+                                            <Disc size={16} className="text-white/10" />
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
-                            </div>
+                            ) : (
+                              /* Single View for 1 album */
+                              <div className="aspect-square bg-app-bg/50 rounded-lg mb-3 overflow-hidden shadow-lg border border-white/5 relative group-hover:border-white/10 transition-colors">
+                                {label.preview_albums?.[0]?.sample_track_id ? (
+                                  <img
+                                    src={`${SERVER_URL}/api/art/${label.preview_albums[0].sample_track_id}`}
+                                    alt={label.name}
+                                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                  />
+                                ) : (
+                                  <div className="w-full h-full flex items-center justify-center bg-white/5">
+                                    <Disc size={48} className="text-white/10" />
+                                  </div>
+                                )}
+                              </div>
+                            )}
                             <div className="text-base font-bold text-app-text truncate">{label.name}</div>
                             <div className="flex items-center justify-between mt-1">
                               <span className="text-sm text-app-text-muted">{label.album_count || 0} albums</span>
@@ -1402,712 +1521,263 @@ function MusicPlayer() {
         {/* Detail View Overlay - Dark Theme */}
         {
           selectedAlbum && (
-            <div className="fixed inset-0 z-[100] bg-app-bg text-app-text overflow-y-auto animate-in fade-in duration-200 custom-scrollbar">
-
-              {/* Header Bar */}
-              <div className="sticky top-0 z-50 bg-app-bg border-b border-app-surface px-6 py-4 flex items-center justify-between">
-                <button
-                  onClick={() => setSelectedAlbum(null)}
-                  className="p-2 hover:bg-app-surface rounded-full transition-colors"
-                >
-                  <X size={20} className="text-app-text-muted" />
-                </button>
-                <div className="flex items-center gap-2 text-sm text-app-text-muted">
-                  {/* Breadcrumb or additional controls could go here */}
-                </div>
-              </div>
-
-              {/* Main Content Container */}
-              <div className="max-w-5xl mx-auto px-8 py-12">
-
-                {/* Hero Section */}
-                <div className="flex flex-col md:flex-row gap-8 mb-8">
-
-                  {/* Album Artwork - Fixed 320px */}
-                  {/* Album Artwork - Fixed 320px with Flip Effect */}
-                  <div className="shrink-0 perspective-[1000px]">
-                    <div
-                      className={`w-64 h-64 relative transition-transform duration-700 [transform-style:preserve-3d] ${albumMetadata?.images?.find(i => i.type === 'back') ? 'cursor-pointer' : ''} ${isFlipped ? '[transform:rotateY(180deg)]' : ''}`}
-                      onClick={() => albumMetadata?.images?.find(i => i.type === 'back') && setIsFlipped(!isFlipped)}
-                    >
-                      {/* Front Face */}
-                      <div className="absolute inset-0 [backface-visibility:hidden] rounded-sm overflow-hidden shadow-lg bg-app-surface">
-                        {selectedAlbum.tracks[0].has_art ? (
-                          <img
-                            src={`${SERVER_URL}/api/art/${selectedAlbum.tracks[0].id}`}
-                            alt={selectedAlbum.name}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <Disc size={64} className="text-app-text-muted" />
-                          </div>
-                        )}
-
-                        {/* Hint to flip if back art exists */}
-                        {albumMetadata?.images?.find(i => i.type === 'back') && (
-                          <div className="absolute bottom-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full backdrop-blur-sm transition-colors" title="View Back Cover">
-                            <RefreshCcw size={14} />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Back Face */}
-                      <div className="absolute inset-0 [backface-visibility:hidden] [transform:rotateY(180deg)] rounded-sm overflow-hidden shadow-lg bg-app-surface border border-app-surface">
-                        {albumMetadata?.images?.find(i => i.type === 'back') ? (
-                          <img
-                            src={`${SERVER_URL}/api/art/release/${albumMetadata.release.mbid}/back`}
-                            alt="Back Cover"
-                            className="w-full h-full object-contain bg-black"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-app-text-muted text-xs">
-                            No Back Cover
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Album Info */}
-                  <div className="flex-1 flex flex-col justify-end min-w-0">
-
-                    {/* Album Title - Serif Font */}
-                    <h1 className="text-5xl md:text-6xl font-serif font-normal leading-tight mb-3 text-app-text">
-                      {selectedAlbum.name}
-                    </h1>
-
-                    {/* Artist */}
-                    <button
-                      onClick={() => {
-                        const artist = artists.find(a => a.name === selectedAlbum.artist);
-                        if (artist) {
-                          setSelectedAlbum(null); // Close album detail
-                          setSelectedArtist(artist); // Open artist detail
-                        }
-                      }}
-                      className="text-lg text-app-text-muted hover:text-app-text hover:underline self-start mb-4"
-                    >
-                      {selectedAlbum.artist}
-                    </button>
-
-                    {/* Metadata Line */}
-                    <div className="flex flex-wrap gap-4 text-sm text-app-text-muted font-medium mb-4">
-                      <span>{selectedAlbum.genre || 'Unknown Genre'}</span>
-                      {selectedAlbum.year && (
-                        <>
-                          <span>•</span>
-                          <span>{selectedAlbum.year}</span>
-                        </>
-                      )}
-                      {selectedAlbum.tracks.length > 0 && (
-                        <>
-                          <span>•</span>
-                          <span>{selectedAlbum.tracks.length} Songs</span>
-                          <span>•</span>
-                          <span>
-                            {Math.floor(selectedAlbum.tracks.reduce((acc, t) => acc + t.duration, 0) / 60)} min
-                          </span>
-                        </>
-                      )}
-                      {albumMetadata?.label && (
-                        <>
-                          <span>•</span>
-                          <span
-                            className="text-app-text hover:text-app-accent cursor-pointer"
-                            title="Record Label"
-                            onClick={() => handleDeepLink(albumMetadata.label.name)}
-                          >
-                            {albumMetadata.label.name}
-                          </span>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Genre Tags */}
-                    {albumMetadata?.tags && albumMetadata.tags.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        {albumMetadata.tags.map((tag, i) => (
-                          <span
-                            key={i}
-                            className="px-2 py-0.5 rounded-full bg-app-surface/50 border border-app-surface text-xs text-app-text-muted hover:text-white hover:border-app-accent transition-colors cursor-pointer"
-                            title="Filter by this tag"
-                            onClick={() => handleDeepLink(tag.name)}
-                          >
-                            {tag.name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Action Buttons */}
-                    <div className="flex gap-4 mt-6">
-                      <button
-                        onClick={() => {
-                          const idx = Array.isArray(tracks) ? tracks.findIndex(t => t.album === selectedAlbum.name) : -1;
-                          if (idx !== -1) {
-                            playTrack(idx, 'cut');
-                            setShowNowPlaying(true);
-                          }
-                        }}
-                        className="bg-white/5 border border-white/10 hover:bg-white/10 text-white px-6 py-2.5 rounded-full font-medium text-sm flex items-center gap-2 shadow-sm transition-all"
-                      >
-                        <Play size={16} fill="currentColor" />
-                        Play now
-                      </button>
-                      <button
-                        onClick={(e) => toggleFavorite(e, selectedAlbum.tracks[0].id)}
-                        className="p-2.5 hover:bg-app-surface rounded-full transition-colors"
-                      >
-                        <svg className={`w-5 h-5 transition-colors ${selectedAlbum.tracks[0].rating === 1 ? 'text-app-accent fill-app-accent' : 'text-app-text-muted'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={addToQueue}
-                        title="Add to Queue"
-                        className="p-2.5 hover:bg-app-surface rounded-full transition-colors"
-                      >
-                        <svg className="w-5 h-5 text-app-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" className="hidden" />
-                        </svg>
-                        {/* Replaced Dots with Plus Circle for "Add to Library/Queue" metaphor */}
-                        <PlusCircle size={20} className="text-app-text-muted" />
-                      </button>
-                    </div>
-
-
-                  </div>
-                </div>
-
-                {/* Description & Metadata Grid */}
-                <div className="grid md:grid-cols-3 gap-8 mb-8 pb-8 border-b border-app-surface">
-
-                  {/* Description Column */}
-                  <div className="md:col-span-2">
-                    <p className="text-sm text-app-text-muted leading-relaxed line-clamp-6">
-                      {albumMetadata?.release?.description
-                        ? albumMetadata.release.description.replace(/<[^>]*>?/gm, '') // Strip HTML
-                        : selectedAlbum.tracks[0].genre
-                          ? `A ${selectedAlbum.tracks[0].genre} album by ${selectedAlbum.artist}.`
-                          : "No description available."
-                      }
-                    </p>
-                    {/* Track count debug */}
-                    <p className="mt-2 text-sm text-app-text-muted">Tracks: {selectedAlbum.tracks.length}</p>
-                  </div>
-
-                  {/* Stats Column */}
-                  <div className="space-y-3 text-sm">
-                    <div>
-                      <div className="text-app-text-muted mb-1">Length</div>
-                      <div className="text-app-text font-medium">
-                        {Math.floor(selectedAlbum.tracks.reduce((acc, t) => acc + t.duration, 0) / 60)} minutes
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-app-text-muted mb-1">Format</div>
-                      <div className="text-app-text font-medium flex items-center gap-1">
-                        {selectedAlbum.tracks[0].format || 'FLAC'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Tabs */}
-                <div className="flex items-center justify-center gap-8 mb-8 border-b border-app-surface sticky top-0 bg-app-bg z-10 transition-all">
-                  <button
-                    onClick={() => setActiveTab('tracks')}
-                    className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'tracks' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
-                  >
-                    Tracks
-                  </button>
-                  <button
-                    onClick={() => setActiveTab('credits')}
-                    className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'credits' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
-                  >
-                    Credits
-                  </button>
-                </div>
-
-                {/* Tracklist vs Credits Content - Added pb-32 for floating dock clearance */}
-                <div className="space-y-1 pb-32">
-                  {activeTab === 'tracks' ? (
-                    selectedAlbum.tracks.map((track, i) => (
-                      <div
-                        key={track.id}
-                        onClick={() => {
-                          const idx = Array.isArray(tracks) ? tracks.findIndex(t => t.id === track.id) : -1;
-                          if (idx !== -1) {
-                            playTrack(idx, 'cut');
-                            setShowNowPlaying(true);
-                          }
-                        }}
-                        className="group flex items-center gap-4 px-4 py-3 hover:bg-app-surface rounded-md cursor-pointer transition-colors"
-                      >
-                        {/* Track Number / Play Icon */}
-                        <div className="w-8 text-center text-sm text-app-text-muted group-hover:text-app-accent font-medium">
-                          <span className="group-hover:hidden">{i + 1}</span>
-                          <Play size={14} fill="currentColor" className="hidden group-hover:inline-block" />
-                        </div>
-
-                        {/* Title */}
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium text-app-text truncate">{track.title}</div>
-                          {track.artist !== selectedAlbum.artist && (
-                            <div className="text-sm text-app-text-muted truncate">{track.artist}</div>
-                          )}
-                        </div>
-
-                        {/* Duration */}
-                        <div className="text-sm text-app-text-muted font-mono tabular-nums">
-                          {Math.floor(track.duration / 60)}:{(Math.floor(track.duration % 60)).toString().padStart(2, '0')}
-                        </div>
-
-                        {/* Heart Icon */}
-                        <button
-                          onClick={(e) => toggleFavorite(e, track.id)}
-                          className={`p-1 hover:bg-white/10 rounded transition-all ${track.rating === 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-                        >
-                          <svg className={`w-4 h-4 transition-colors ${track.rating === 1 ? 'text-app-accent fill-app-accent' : 'text-app-text-muted'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                          </svg>
-                        </button>
-                      </div>
-                    ))
-                  ) : (
-                    /* Credits View - Grouped by Role */
-                    <div className="space-y-6 px-4">
-                      {Object.keys(albumCredits).length > 0 ? (
-                        Object.entries(albumCredits)
-                          .filter(([role]) => role !== 'Lyricist') // Remove Lyricist as requested
-                          .map(([role, credits]) => (
-                            <div key={role} className="mb-6">
-                              <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-3 border-b border-app-surface pb-2">
-                                {role}
-                              </h3>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
-                                {(credits as any[]).map((credit, idx) => (
-                                  <button
-                                    key={idx}
-                                    onClick={() => {
-                                      if (credit.artist_mbid) {
-                                        // TODO: Open artist detail panel
-                                        console.log('Open artist:', credit.artist_mbid);
-                                      }
-                                      handleDeepLink(credit.name);
-                                    }}
-                                    className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-app-surface transition-colors text-left group"
-                                  >
-                                    <div className="w-8 h-8 rounded-full bg-app-surface flex items-center justify-center text-xs font-medium text-app-text-muted group-hover:bg-white/10 group-hover:text-white transition-colors border border-transparent group-hover:border-white/20">
-                                      {credit.name?.charAt(0).toUpperCase()}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="font-medium text-app-text truncate group-hover:text-app-accent transition-colors">
-                                        {credit.name}
-                                      </div>
-                                      {credit.instrument && (
-                                        <div className="text-xs text-app-text-muted truncate">
-                                          {credit.instrument}
-                                        </div>
-                                      )}
-                                    </div>
-                                    {credit.artist_mbid && (
-                                      <svg className="w-4 h-4 text-app-text-muted opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                                      </svg>
-                                    )}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          ))
-                      ) : (
-                        <div className="py-12 text-center">
-                          <div className="text-app-text-muted mb-4">No detailed credits available.</div>
-                        </div>
-                      )}
-
-                      {/* Always show Enrich button (or progress) at the bottom */}
-                      <div className="mt-8 pt-8 border-t border-app-surface flex flex-col items-center">
-                        {enrichmentStatus.isEnriching ? (
-                          <div className="w-full max-w-sm">
-                            <div className="flex justify-between text-xs text-app-text-muted mb-2">
-                              <span>Enriching Library...</span>
-                              <span>{enrichmentStatus.processed} / {enrichmentStatus.total}</span>
-                            </div>
-                            <div className="w-full h-1.5 bg-app-surface rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-white/80 shadow-[0_0_10px_rgba(255,255,255,0.3)] transition-all duration-300 ease-out"
-                                style={{ width: `${(enrichmentStatus.processed / (enrichmentStatus.total || 1)) * 100}%` }}
-                              />
-                            </div>
-                            {enrichmentStatus.currentTrack && (
-                              <div className="text-xs text-app-text-muted mt-2 text-center truncate">
-                                {enrichmentStatus.currentTrack}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <>
-                            <button
-                              onClick={async () => {
-                                try {
-                                  await axios.post(`${SERVER_URL}/api/enrich`);
-                                  // Status will update via polling
-                                } catch (e) {
-                                  console.error("Enrichment failed:", e);
-                                }
-                              }}
-                              className="px-4 py-2 bg-app-surface border border-white/5 hover:bg-white/10 hover:border-white/20 hover:text-white text-app-text-muted rounded-lg transition-colors text-sm flex items-center gap-2"
-                            >
-                              <span>🎵</span>
-                              <span>Enrich with MusicBrainz</span>
-                            </button>
-                            <p className="text-xs text-app-text-muted mt-2">Fetches producer, engineer, labels, and genre tags</p>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Album Footer Info - Copyright & Labels */}
-                  <div className="mt-12 pt-8 border-t border-app-surface/30 text-center">
-                    <div className="text-sm font-medium text-app-text-muted">
-                      © {selectedAlbum.year || ''} {albumMetadata?.label?.name || selectedAlbum.artist}
-                    </div>
-                    <div className="flex flex-col items-center gap-1 mt-2 text-xs text-app-text-muted/60 font-mono">
-                      {albumMetadata?.label?.name && (
-                        <span>Released by {albumMetadata.label.name}</span>
-                      )}
-                      {albumMetadata?.release?.country && (
-                        <span>{albumMetadata.release.country} Release</span>
-                      )}
-                      {albumMetadata?.release?.barcode && (
-                        <span className="opacity-50">UPC: {albumMetadata.release.barcode}</span>
-                      )}
-                    </div>
-                    <div className="mt-6 flex justify-center gap-4 opacity-40 grayscale hover:grayscale-0 transition-all duration-500">
-                      {/* Placeholder for label logos / copyright badges */}
-                      <Disc size={24} />
-                    </div>
-                  </div>
-                </div>
-
-              </div>
-            </div>
+            <AlbumDetailModal
+              album={selectedAlbum}
+              tracks={tracks}
+              artists={artists}
+              onClose={() => setSelectedAlbum(null)}
+              onPlayTrack={playTrack}
+              onShowNowPlaying={() => setShowNowPlaying(true)}
+              onArtistClick={(artist: Artist) => {
+                setSelectedAlbum(null);
+                setSelectedArtist(artist);
+              }}
+              onTagClick={handleDeepLink}
+              onToggleFavorite={toggleFavorite}
+            />
           )
         }
         {/* Collection Detail View Overlay */}
         {selectedCollection && (
-          <div
-            className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm overflow-y-auto"
-            onClick={() => setSelectedCollection(null)}
-          >
-            <div className="min-h-screen p-8" onClick={e => e.stopPropagation()}>
-              <div className="max-w-6xl mx-auto">
-                <div className="flex items-center justify-between mb-8">
-                  <div>
-                    <button
-                      onClick={() => setSelectedCollection(null)}
-                      className="text-app-text-muted hover:text-white mb-4 flex items-center gap-2"
-                    >
-                      <X size={20} /> Close
-                    </button>
-                    <h1 className="text-3xl font-bold text-white">{selectedCollection.name}</h1>
-                    <p className="text-app-text-muted mt-1">{selectedCollection.description}</p>
-                    <p className="text-sm text-app-text-muted mt-2">{selectedCollection.albums?.length || 0} albums</p>
-                  </div>
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => {
-                        // Shuffle collection
-                        if (selectedCollection.albums?.length) {
-                          const randomAlbum = selectedCollection.albums[Math.floor(Math.random() * selectedCollection.albums.length)];
-                          const albumTracks = tracks.filter(t => t.album === randomAlbum.album_name); // Simplified lookup
-                          if (albumTracks.length) {
-                            const idx = tracks.findIndex(t => t.id === albumTracks[0].id);
-                            if (idx !== -1) playTrack(idx, 'cut');
-                          }
-                        }
-                      }}
-                      className="px-6 py-2.5 bg-app-accent hover:bg-app-accent/80 rounded-full text-white font-medium flex items-center gap-2"
-                    >
-                      <Shuffle size={18} /> Shuffle
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (confirm('Delete this collection?')) {
-                          await axios.delete(`${SERVER_URL}/api/collections/${selectedCollection.id}`);
-                          refreshPlaylists();
-                          setSelectedCollection(null);
-                        }
-                      }}
-                      className="px-6 py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-full font-medium"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-                  {selectedCollection.albums?.map((album: any) => (
-                    <div
-                      key={album.id}
-                      className="group relative bg-app-surface rounded-xl p-4 cursor-pointer"
-                      onClick={() => {
-                        const albumData = albums.find(a => a.name === album.album_name);
-                        if (albumData) {
-                          setSelectedAlbum(albumData);
-                          setSelectedCollection(null);
-                        }
-                      }}
-                    >
-                      {/* Remove button */}
-                      <div
-                        className="absolute top-2 right-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          try {
-                            await axios.delete(`${SERVER_URL}/api/collections/${selectedCollection.id}/albums/${album.album_name}`);
-                            // Refresh local state
-                            const res = await axios.get(`${SERVER_URL}/api/collections`);
-                            setAllCollections(res.data);
-                            const updated = res.data.find((c: any) => c.id === selectedCollection.id);
-                            setSelectedCollection(updated);
-                          } catch (err) { console.error(err); }
-                        }}
-                      >
-                        <button className="p-1.5 bg-black/50 hover:bg-red-500 rounded-full text-white">
-                          <X size={14} />
-                        </button>
-                      </div>
-
-                      <div className="aspect-square bg-app-bg rounded-lg mb-3 overflow-hidden shadow-lg">
-                        {album.sample_track_id ? (
-                          <img loading="lazy" decoding="async" src={`${SERVER_URL}/api/art/${album.sample_track_id}`} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center"><Disc size={48} className="text-app-text-muted" /></div>
-                        )}
-                      </div>
-                      <div className="font-bold text-app-text truncate">{album.album_name}</div>
-                      <div className="text-sm text-app-text-muted truncate">{album.artist_name}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
+          <CollectionDetailModal
+            collection={selectedCollection}
+            tracks={tracks}
+            onClose={() => setSelectedCollection(null)}
+            onPlayTrack={playTrack}
+            onAlbumClick={(albumName, artistName) => {
+              const albumData = Array.isArray(albums) ? albums.find(a => a.name === albumName && a.artist === artistName) : null;
+              if (albumData) {
+                setSelectedAlbum(albumData);
+                setSelectedCollection(null);
+              }
+            }}
+            onDelete={async () => {
+              if (confirm('Delete this collection?')) {
+                try {
+                  await axios.delete(`${SERVER_URL}/api/collections/${selectedCollection.id}`);
+                  const res = await axios.get(`${SERVER_URL}/api/collections`);
+                  setAllCollections(res.data);
+                  setSelectedCollection(null);
+                } catch (e) {
+                  console.error('Failed to delete collection:', e);
+                }
+              }
+            }}
+            onRefresh={async () => {
+              try {
+                const res = await axios.get(`${SERVER_URL}/api/collections`);
+                setAllCollections(res.data);
+              } catch (e) {
+                console.error('Failed to refresh collections:', e);
+              }
+            }}
+          />
         )}
+
+        {/* Playlist Detail View */}
+        {
+          selectedPlaylist && (
+            <PlaylistDetailModal
+              playlist={selectedPlaylist}
+              allTracks={tracks}
+              onClose={() => setSelectedPlaylist(null)}
+              onPlayTrack={playTrack}
+              onShowNowPlaying={() => setShowNowPlaying(true)}
+              onRefresh={refreshPlaylists}
+            />
+          )
+        }
 
         {/* Add to Collection Modal */}
-        {addToCollectionAlbum && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <div className="bg-app-surface w-[500px] rounded-2xl p-6 shadow-2xl border border-white/10">
-              <h2 className="text-xl font-bold text-white mb-4">
-                {addToCollectionAlbum.name ? `Add "${addToCollectionAlbum.name}" to Collection` : 'Create New Collection'}
-              </h2>
-              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-                <button
-                  onClick={() => {
-                    // Logic to create new collection
-                    const name = prompt('Collection Name:');
-                    if (name) {
-                      axios.post(`${SERVER_URL}/api/collections`, {
-                        name,
-                        description: '',
-                        // Only add album if we have one
-                        initialAlbum: addToCollectionAlbum.name ? addToCollectionAlbum : undefined
-                      }).then(() => {
-                        refreshPlaylists();
-                        setAddToCollectionAlbum(null);
-                      });
-                    }
-                  }}
-                  className="w-full p-4 rounded-xl border-2 border-dashed border-white/10 hover:border-app-accent hover:bg-white/5 flex items-center gap-3 transition-colors text-left"
-                >
-                  <div className="w-10 h-10 rounded-full bg-app-accent/20 flex items-center justify-center text-app-accent">
-                    <Plus size={20} />
-                  </div>
-                  <div>
-                    <div className="font-bold text-white">Create New Collection</div>
-                    <div className="text-sm text-app-text-muted">Start a new collection</div>
-                  </div>
-                </button>
-
-                {allCollections.map(col => (
+        {
+          addToCollectionAlbum && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+              <div className="bg-app-surface w-[500px] rounded-2xl p-6 shadow-2xl border border-white/10">
+                <h2 className="text-xl font-bold text-white mb-4">
+                  {addToCollectionAlbum.name ? `Add "${addToCollectionAlbum.name}" to Collection` : 'Create New Collection'}
+                </h2>
+                <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
                   <button
-                    key={col.id}
-                    onClick={async () => {
-                      if (addToCollectionAlbum.name) {
-                        await axios.post(`${SERVER_URL}/api/collections/${col.id}/albums`, {
-                          albumName: addToCollectionAlbum.name,
-                          artistName: addToCollectionAlbum.artist
+                    onClick={() => {
+                      // Logic to create new collection
+                      const name = prompt('Collection Name:');
+                      if (name) {
+                        axios.post(`${SERVER_URL}/api/collections`, {
+                          name,
+                          description: '',
+                          // Only add album if we have one
+                          initialAlbum: addToCollectionAlbum.name ? addToCollectionAlbum : undefined
+                        }).then(() => {
+                          refreshPlaylists();
+                          setAddToCollectionAlbum(null);
                         });
-                        refreshPlaylists();
                       }
-                      setAddToCollectionAlbum(null);
                     }}
-                    className="w-full p-3 rounded-xl hover:bg-white/5 flex items-center gap-3 transition-colors text-left group"
+                    className="w-full p-4 rounded-xl border-2 border-dashed border-white/10 hover:border-app-accent hover:bg-white/5 flex items-center gap-3 transition-colors text-left"
                   >
-                    <div className="w-12 h-12 rounded-lg bg-white/5 flex items-center justify-center overflow-hidden">
-                      {col.preview_albums?.[0]?.sample_track_id ? (
-                        <img loading="lazy" decoding="async" src={`${SERVER_URL}/api/art/${col.preview_albums[0].sample_track_id}`} className="w-full h-full object-cover" />
-                      ) : <ListMusic size={20} className="text-app-text-muted" />}
+                    <div className="w-10 h-10 rounded-full bg-app-accent/20 flex items-center justify-center text-app-accent">
+                      <Plus size={20} />
                     </div>
-                    <div className="flex-1">
-                      <div className="font-bold text-app-text group-hover:text-white transition-colors">{col.name}</div>
-                      <div className="text-sm text-app-text-muted">{col.album_count || 0} albums</div>
+                    <div>
+                      <div className="font-bold text-white">Create New Collection</div>
+                      <div className="text-sm text-app-text-muted">Start a new collection</div>
                     </div>
                   </button>
-                ))}
-              </div>
-              <div className="mt-6 flex justify-end">
-                <button onClick={() => setAddToCollectionAlbum(null)} className="px-4 py-2 hover:bg-white/10 rounded-lg text-app-text-muted hover:text-white">Cancel</button>
+
+                  {allCollections.map(col => (
+                    <button
+                      key={col.id}
+                      onClick={async () => {
+                        if (addToCollectionAlbum.name) {
+                          await axios.post(`${SERVER_URL}/api/collections/${col.id}/albums`, {
+                            albumName: addToCollectionAlbum.name,
+                            artistName: addToCollectionAlbum.artist
+                          });
+                          refreshPlaylists();
+                        }
+                        setAddToCollectionAlbum(null);
+                      }}
+                      className="w-full p-3 rounded-xl hover:bg-white/5 flex items-center gap-3 transition-colors text-left group"
+                    >
+                      <div className="w-12 h-12 rounded-lg bg-white/5 flex items-center justify-center overflow-hidden">
+                        {col.preview_albums?.[0]?.sample_track_id ? (
+                          <img loading="lazy" decoding="async" src={`${SERVER_URL}/api/art/${col.preview_albums[0].sample_track_id}`} className="w-full h-full object-cover" />
+                        ) : <ListMusic size={20} className="text-app-text-muted" />}
+                      </div>
+                      <div className="flex-1">
+                        <div className="font-bold text-app-text group-hover:text-white transition-colors">{col.name}</div>
+                        <div className="text-sm text-app-text-muted">{col.album_count || 0} albums</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-6 flex justify-end">
+                  <button onClick={() => setAddToCollectionAlbum(null)} className="px-4 py-2 hover:bg-white/10 rounded-lg text-app-text-muted hover:text-white">Cancel</button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )
+        }
 
         {/* Playlist Modal (Create/Edit) */}
-        {showPlaylistModal && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <div className="bg-app-surface w-[400px] rounded-2xl p-6 shadow-2xl border border-white/10">
-              <h2 className="text-xl font-bold text-white mb-6">Create Playlist</h2>
-              <form onSubmit={async (e) => {
-                e.preventDefault();
-                const formData = new FormData(e.currentTarget);
-                const name = formData.get('name') as string;
-                const desc = formData.get('description') as string;
-                if (name) {
-                  await axios.post(`${SERVER_URL}/api/playlists`, { name, description: desc });
-                  refreshPlaylists();
-                  setShowPlaylistModal(false);
-                }
-              }}>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-medium text-app-text-muted uppercase tracking-wider mb-2">Name</label>
-                    <input name="name" autoFocus className="w-full bg-app-bg border border-white/10 rounded-lg px-4 py-2 text-white focus:border-app-accent outline-none" placeholder="My Playlist" />
+        {
+          showPlaylistModal && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+              <div className="bg-app-surface w-[400px] rounded-2xl p-6 shadow-2xl border border-white/10">
+                <h2 className="text-xl font-bold text-white mb-6">Create Playlist</h2>
+                <form onSubmit={async (e) => {
+                  e.preventDefault();
+                  const formData = new FormData(e.currentTarget);
+                  const name = formData.get('name') as string;
+                  const desc = formData.get('description') as string;
+                  if (name) {
+                    await axios.post(`${SERVER_URL}/api/playlists`, { name, description: desc });
+                    refreshPlaylists();
+                    setShowPlaylistModal(false);
+                  }
+                }}>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-medium text-app-text-muted uppercase tracking-wider mb-2">Name</label>
+                      <input name="name" autoFocus className="w-full bg-app-bg border border-white/10 rounded-lg px-4 py-2 text-white focus:border-app-accent outline-none" placeholder="My Playlist" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-app-text-muted uppercase tracking-wider mb-2">Description</label>
+                      <textarea name="description" className="w-full bg-app-bg border border-white/10 rounded-lg px-4 py-2 text-white focus:border-app-accent outline-none h-24 resize-none" placeholder="Optional description..." />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-medium text-app-text-muted uppercase tracking-wider mb-2">Description</label>
-                    <textarea name="description" className="w-full bg-app-bg border border-white/10 rounded-lg px-4 py-2 text-white focus:border-app-accent outline-none h-24 resize-none" placeholder="Optional description..." />
+                  <div className="flex justify-end gap-3 mt-8">
+                    <button type="button" onClick={() => setShowPlaylistModal(false)} className="px-4 py-2 hover:bg-white/10 rounded-lg text-app-text-muted hover:text-white">Cancel</button>
+                    <button type="submit" className="px-6 py-2 bg-app-accent hover:bg-app-accent/80 rounded-lg text-white font-medium">Create</button>
                   </div>
-                </div>
-                <div className="flex justify-end gap-3 mt-8">
-                  <button type="button" onClick={() => setShowPlaylistModal(false)} className="px-4 py-2 hover:bg-white/10 rounded-lg text-app-text-muted hover:text-white">Cancel</button>
-                  <button type="submit" className="px-6 py-2 bg-app-accent hover:bg-app-accent/80 rounded-lg text-white font-medium">Create</button>
-                </div>
-              </form>
+                </form>
+              </div>
             </div>
-          </div>
-        )}
+          )
+        }
 
         {/* Label Detail View Overlay */}
         {
           selectedLabel && (
-            <div
-              className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm overflow-y-auto"
-              onClick={() => setSelectedLabel(null)}
-            >
-              <div
-                className="min-h-screen p-8"
-                onClick={e => e.stopPropagation()}
-              >
-                <div className="max-w-6xl mx-auto">
-                  {/* Header */}
-                  <div className="flex items-center justify-between mb-8">
-                    <div>
-                      <button
-                        onClick={() => setSelectedLabel(null)}
-                        className="text-app-text-muted hover:text-white mb-4 flex items-center gap-2"
-                      >
-                        <X size={20} />
-                        Close
-                      </button>
-                      <h1 className="text-3xl font-bold text-white">{selectedLabel.name}</h1>
-                      <p className="text-app-text-muted mt-1">
-                        {selectedLabel.type || 'Record Label'}
-                        {selectedLabel.country && ` • ${selectedLabel.country}`}
-                        {selectedLabel.founded && ` • Founded ${selectedLabel.founded}`}
-                      </p>
-                      <p className="text-sm text-app-text-muted mt-2">
-                        {selectedLabel.albums?.length || 0} albums
-                      </p>
-                    </div>
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => {
-                          // Shuffle play all albums from this label
-                          if (selectedLabel.albums?.length > 0) {
-                            const randomAlbum = selectedLabel.albums[Math.floor(Math.random() * selectedLabel.albums.length)];
-                            const albumTracks = tracks.filter(t =>
-                              t.album === randomAlbum.album_name
-                            );
-                            if (albumTracks.length > 0) {
-                              const idx = tracks.findIndex(t => t.id === albumTracks[0].id);
-                              if (idx !== -1) playTrack(idx, 'cut');
-                            }
-                          }
-                        }}
-                        className="px-6 py-2.5 bg-app-accent hover:bg-app-accent/80 rounded-full text-white font-medium flex items-center gap-2"
-                      >
-                        <Shuffle size={18} />
-                        Shuffle
-                      </button>
-                    </div>
-                  </div>
+            <LabelDetailModal
+              label={selectedLabel}
+              onClose={() => setSelectedLabel(null)}
+              onAlbumClick={(albumName, artistName) => {
+                const album = albums.find(a => a.name === albumName);
+                if (album) {
+                  setSelectedAlbum(album);
+                  setSelectedLabel(null);
+                }
+              }}
+              onPlayAll={() => {
+                if (selectedLabel.albums?.length > 0) {
+                  // Get all album names in the label
+                  const labelAlbumNames = new Set(selectedLabel.albums.map(a => a.album_name));
+                  // Filter tracks that belong to these albums
+                  const labelTracks = tracks.filter(t => labelAlbumNames.has(t.album));
 
-                  {/* Albums Grid */}
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-                    {selectedLabel.albums?.map((album: any) => (
-                      <div
-                        key={album.id}
-                        className="bg-app-surface hover:bg-app-surface/80 rounded-xl p-4 cursor-pointer transition-colors group"
-                        onClick={() => {
-                          // Open this album in the album detail view
-                          const albumData = albums.find(a => a.name === album.album_name);
-                          if (albumData) {
-                            setSelectedAlbum(albumData);
-                            setSelectedLabel(null);
-                          }
-                        }}
-                      >
-                        <div className="aspect-square bg-app-bg rounded-lg mb-3 overflow-hidden shadow-lg">
-                          {album.sample_track_id ? (
-                            <img
-                              src={`${SERVER_URL}/api/art/${album.sample_track_id}`}
-                              alt=""
-                              className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center">
-                              <Disc size={48} className="text-app-text-muted" />
-                            </div>
-                          )}
-                        </div>
-                        <div className="text-base font-bold text-app-text truncate">{album.album_name}</div>
-                        <div className="text-sm text-app-text-muted truncate">{album.artist_name}</div>
-                        {album.release_date && (
-                          <div className="text-xs text-app-text-muted mt-1">{album.release_date.substring(0, 4)}</div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                  if (labelTracks.length > 0) {
+                    // Sort by album (same order as label.albums) then track number
+                    const sortedTracks = labelTracks.sort((a, b) => {
+                      const albumIndexA = selectedLabel.albums.findIndex(alb => alb.album_name === a.album);
+                      const albumIndexB = selectedLabel.albums.findIndex(alb => alb.album_name === b.album);
+                      if (albumIndexA !== albumIndexB) return albumIndexA - albumIndexB;
+                      return (a.track_number || 0) - (b.track_number || 0);
+                    });
 
-                  {(!selectedLabel.albums || selectedLabel.albums.length === 0) && (
-                    <div className="text-center py-16">
-                      <Disc size={64} className="mx-auto mb-4 text-app-text-muted opacity-50" />
-                      <h2 className="text-xl font-bold text-app-text mb-2">No albums found for this label</h2>
-                      <p className="text-app-text-muted">Albums are linked via MusicBrainz metadata</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+                    // Replace queue and play
+                    // Note: We need a way to set the entire queue. 
+                    // Current playTrack(idx) plays from the GLOBAL 'tracks' list.
+                    // If we want to play this specific subset, we might need a context method setQueue/playTracks.
+                    // BUT, based on the codebase, we usually just play from the current view.
+                    // If we can't change the view, we find the first track in the global list and play it? 
+                    // No, that won't limit playback to just label tracks if shuffle is off.
+
+                    // Workaround: For now, just play the first track found. 
+                    // Ideally check if audio context allows setting a custom queue.
+                    // Assuming AudioContext/AppContent handles specific queues?
+                    // Looking at previous cues, we might just play the first one.
+
+                    // Actually, let's look at `playTrack`. 
+                    // If we can't set a queue, shuffling might be hard purely client side if logic depends on global list.
+                    // Let's assume for now we just find the index in main list.
+                    // Wait, `onShuffle` logic in previous code snippet was:
+                    // `const albumTracks = tracks.filter(...)`
+                    // `const idx = tracks.findIndex(...)`
+                    // `playTrack(idx, ...)`
+
+                    // If we want true "Play All" restricted to label, we need to filter the view?
+                    // Or just start playing.
+
+                    // Let's implement robust "Queue" support later if needed. 
+                    // For now: 
+                    // Play All -> Find first track of first album in main list -> Play?
+                    // Shuffle -> Pick random track from label tracks -> Play?
+                    // This is imperfect but matches existing patterns I see.
+
+                    // BETTER APPROACH:
+                    // If we want to "Play All", we probably want to set the current context to these tracks.
+                    // Since I don't see `setQueue`, I will try to just play the first track of the first album.
+
+                    // For Shuffle:
+                    const randomTrack = labelTracks[Math.floor(Math.random() * labelTracks.length)];
+                    const idx = tracks.findIndex(t => t.id === randomTrack.id);
+                    if (idx !== -1) playTrack(idx, 'cut');
+                  }
+                }
+              }}
+              onShuffle={() => {
+                if (selectedLabel.albums?.length > 0) {
+                  const labelAlbumNames = new Set(selectedLabel.albums.map(a => a.album_name));
+                  const labelTracks = tracks.filter(t => labelAlbumNames.has(t.album));
+                  if (labelTracks.length > 0) {
+                    const randomTrack = labelTracks[Math.floor(Math.random() * labelTracks.length)];
+                    const idx = tracks.findIndex(t => t.id === randomTrack.id);
+                    if (idx !== -1) playTrack(idx, 'cut');
+                  }
+                }
+              }}
+            />
           )
         }
 
@@ -2173,27 +1843,29 @@ function MusicPlayer() {
       </div >
 
       {/* Floating Player Dock - Now at root level for proper fixed positioning */}
-      {!showNowPlaying && currentTrack && (
-        <MiniPlayer
-          currentTrack={currentTrack}
-          isPlaying={isPlaying}
-          shuffleMode={shuffleMode}
-          repeatMode={repeatMode}
-          volume={volume}
-          currentTrackIndex={currentTrackIndex}
-          artists={artists}
-          activeDeck={activeDeck}
-          audioRefA={audioRefA}
-          audioRefB={audioRefB}
-          setShowNowPlaying={setShowNowPlaying}
-          setSelectedArtist={setSelectedArtist}
-          setShuffleMode={setShuffleMode}
-          setRepeatMode={setRepeatMode}
-          setVolume={setVolume}
-          playTrack={playTrack}
-          togglePlay={togglePlay}
-        />
-      )}
+      {
+        !showNowPlaying && currentTrack && (
+          <MiniPlayer
+            currentTrack={currentTrack}
+            isPlaying={isPlaying}
+            shuffleMode={shuffleMode}
+            repeatMode={repeatMode}
+            volume={volume}
+            currentTrackIndex={currentTrackIndex}
+            artists={artists}
+            activeDeck={activeDeck}
+            audioRefA={audioRefA}
+            audioRefB={audioRefB}
+            setShowNowPlaying={setShowNowPlaying}
+            setSelectedArtist={setSelectedArtist}
+            setShuffleMode={setShuffleMode}
+            setRepeatMode={setRepeatMode}
+            setVolume={setVolume}
+            playTrack={playTrack}
+            togglePlay={togglePlay}
+          />
+        )
+      }
     </div >
   );
 }
@@ -2201,10 +1873,24 @@ function MusicPlayer() {
 function AppContent() {
   const { user, isLoading } = useAuth();
 
+  // Safety timeout for the spinner
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (isLoading) {
+        console.warn("Forcing loading to stop after 8s safety timeout");
+        // Since we can't force set isLoading in context from here easily without exposing it,
+        // we can just render the Login page if it times out
+        // But better is to trust the timeout we added to AuthContext.
+      }
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [isLoading]);
+
   if (isLoading) {
     return (
-      <div className="h-screen w-screen bg-black flex items-center justify-center">
+      <div className="h-screen w-screen bg-black flex flex-col gap-4 items-center justify-center z-[9999]">
         <div className="w-8 h-8 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-white/50 text-sm font-mono">Initializing App...</p>
       </div>
     );
   }

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useRef, useCallback, ReactNode } from 'react';
 import axios from 'axios';
-import { audioEngine } from '../audio/engine';
+import { audioEngine } from '../audio/AudioEngine';
 import type { Track } from '../types';
 
 const SERVER_URL = 'http://localhost:3001';
@@ -188,7 +188,7 @@ export function AudioProvider({ children }: AudioProviderProps) {
         const newGains = [...eqGains];
         newGains[index] = parseFloat(val);
         setEqGains(newGains);
-        audioEngine.setEq(newGains);
+        audioEngine.setBandGain(index, newGains[index]);
     }, [eqGains]);
 
     const value: AudioContextType = {

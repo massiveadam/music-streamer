@@ -17,7 +17,7 @@ export default function LoginPage() {
 
     useEffect(() => {
         // Check if verify setup logic is needed (e.g. first run)
-        axios.get(`${SERVER_URL}/api/auth/setup`)
+        axios.get(`${SERVER_URL}/api/auth/setup`, { timeout: 5000 })
             .then(res => {
                 if (res.data.setupRequired) {
                     setSetupRequired(true);

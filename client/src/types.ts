@@ -24,6 +24,8 @@ export interface Track {
     release_mbid?: string;
     enriched?: number;
     added_at?: string;
+    track_number?: number;
+    disc_number?: number;
 }
 
 export interface Artist {
@@ -73,6 +75,30 @@ export interface AlbumImage {
     type: string;
     path: string;
     source: string;
+}
+
+export interface AlbumCollection {
+    id: number;
+    name: string;
+    description?: string;
+    pinned_to_home: number;
+    cover_art_path?: string;
+    user_id?: number;
+    is_shared: number;
+    album_count?: number;
+    preview_albums?: CollectionAlbum[];
+    created_at: string;
+    updated_at: string;
+}
+
+export interface CollectionAlbum {
+    id: number;
+    collection_id: number;
+    album_name: string;
+    artist_name: string;
+    position: number;
+    sample_track_id?: number;
+    added_at: string;
 }
 
 // ============================================
@@ -136,7 +162,7 @@ export interface EnrichStatus {
 
 export type RepeatMode = 'off' | 'all' | 'one';
 export type ViewTab = 'home' | 'tracks' | 'albums' | 'artists' | 'playlists' | 'search' | 'settings';
-export type LibraryView = 'tracks' | 'albums' | 'artists' | 'labels';
+export type LibraryView = 'grid' | 'list' | 'tracks' | 'albums' | 'artists' | 'labels' | 'favorites';
 export type AlbumSort = 'artist' | 'title' | 'year' | 'recent';
 export type Theme = 'dark' | 'light';
 

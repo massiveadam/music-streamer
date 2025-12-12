@@ -53,7 +53,7 @@ export default function PlaylistsPage({
                                 setEditingPlaylist({ id: 0, name: '', description: '' } as Playlist);
                                 setShowPlaylistModal(true);
                             } else {
-                                setAddToCollectionAlbum(null);
+                                setAddToCollectionAlbum({ name: '', artist: '' });
                             }
                         }}
                         className="px-4 py-2 bg-app-accent hover:bg-app-accent/80 rounded-lg text-white font-bold transition-colors flex items-center gap-2"
@@ -118,7 +118,7 @@ export default function PlaylistsPage({
                             {/* Create Collection Card */}
                             <div
                                 className="bg-app-surface/50 hover:bg-app-surface border-2 border-dashed border-app-surface hover:border-app-text-muted rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all group min-h-[200px]"
-                                onClick={() => setAddToCollectionAlbum(null)}
+                                onClick={() => setAddToCollectionAlbum({ name: '', artist: '' })}
                             >
                                 <div className="w-16 h-16 rounded-full bg-app-surface group-hover:bg-app-accent/20 flex items-center justify-center mb-4 transition-colors">
                                     <Plus size={32} className="text-app-text-muted group-hover:text-app-accent" />
@@ -169,7 +169,7 @@ export default function PlaylistsPage({
                                 <h2 className="text-xl font-bold text-app-text mb-2">No collections yet</h2>
                                 <p className="text-app-text-muted">Group albums into collections like "Jazz Classics" or "Gym Rotation"</p>
                                 <button
-                                    onClick={() => setAddToCollectionAlbum(null)}
+                                    onClick={() => setAddToCollectionAlbum({ name: '', artist: '' })}
                                     className="mt-4 px-6 py-2 bg-app-accent hover:bg-app-accent/80 rounded-full text-white font-medium"
                                 >
                                     Create Collection

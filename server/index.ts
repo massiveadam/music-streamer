@@ -18,6 +18,11 @@ const PORT = 3001;
 app.use(cors());
 app.use(express.json());
 
+// Root route for health check
+app.get('/', (req, res) => {
+    res.send('OpenStream Server is Running!');
+});
+
 // Type definitions
 interface ScanStatus {
     isScanning: boolean;
@@ -1292,7 +1297,7 @@ import { Playlist } from '../types';
 // Update playlist details
 app.put('/api/playlists/:id', auth.authenticateToken, (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-    const { name, description, pinned_to_home, cover_art_path } = req.body;
+    const { name, description, pinned_to_home, cover_art_path, type, rules } = req.body;
 
     // Verify ownership
     const playlist = db.prepare('SELECT user_id FROM playlists WHERE id = ?').get(id) as { user_id: number } | undefined;
@@ -1306,6 +1311,8 @@ app.put('/api/playlists/:id', auth.authenticateToken, (req: AuthRequest, res: Re
     if (description !== undefined) { updates.push('description = ?'); params.push(description); }
     if (pinned_to_home !== undefined) { updates.push('pinned_to_home = ?'); params.push(pinned_to_home ? 1 : 0); }
     if (cover_art_path !== undefined) { updates.push('cover_art_path = ?'); params.push(cover_art_path); }
+    if (type !== undefined) { updates.push('type = ?'); params.push(type); }
+    if (rules !== undefined) { updates.push('rules = ?'); params.push(JSON.stringify(rules)); }
 
     if (updates.length === 0) return res.json({ success: true }); // Nothing to update
 
@@ -1330,27 +1337,7 @@ app.delete('/api/playlists/:id', auth.authenticateToken, (req: AuthRequest, res:
     res.json({ success: true });
 });
 
-// Update playlist (including pinning to home)
-app.put('/api/playlists/:id', (req: Request, res: Response) => {
-    const { id } = req.params;
-    const { name, description, pinned_to_home, type, rules, cover_art_path } = req.body;
 
-    const updates: string[] = [];
-    const values: any[] = [];
-
-    if (name !== undefined) { updates.push('name = ?'); values.push(name); }
-    if (description !== undefined) { updates.push('description = ?'); values.push(description); }
-    if (pinned_to_home !== undefined) { updates.push('pinned_to_home = ?'); values.push(pinned_to_home ? 1 : 0); }
-    if (type !== undefined) { updates.push('type = ?'); values.push(type); }
-    if (rules !== undefined) { updates.push('rules = ?'); values.push(JSON.stringify(rules)); }
-    if (cover_art_path !== undefined) { updates.push('cover_art_path = ?'); values.push(cover_art_path); }
-
-    updates.push('updated_at = CURRENT_TIMESTAMP');
-    values.push(id);
-
-    db.prepare(`UPDATE playlists SET ${updates.join(', ')} WHERE id = ?`).run(...values);
-    res.json({ success: true });
-});
 
 // ========== PLAY HISTORY ENDPOINTS ==========
 
@@ -1564,8 +1551,14 @@ app.get('/api/collections/:id', auth.authenticateToken, (req: AuthRequest, res: 
     }
 
     const albums = db.prepare(`
-        SELECT ca.*,
-               (SELECT id FROM tracks t WHERE t.album = ca.album_name AND t.artist = ca.artist_name AND t.has_art = 1 LIMIT 1) as sample_track_id
+        SELECT 
+            ca.album_name as name,
+            ca.artist_name as artist,
+            ca.position,
+            ca.collection_id,
+            (SELECT id FROM tracks t WHERE t.album = ca.album_name AND t.artist = ca.artist_name AND t.has_art = 1 LIMIT 1) as sample_track_id,
+            (SELECT year FROM tracks t WHERE t.album = ca.album_name AND t.artist = ca.artist_name AND t.year IS NOT NULL LIMIT 1) as year,
+            (SELECT COUNT(*) FROM tracks t WHERE t.album = ca.album_name AND t.artist = ca.artist_name) as track_count
         FROM collection_albums ca
         WHERE ca.collection_id = ?
         ORDER BY ca.position
@@ -1677,18 +1670,37 @@ app.get('/api/labels', (req: Request, res: Response) => {
     const offset = (page - 1) * limit;
 
     const labels = db.prepare(`
-        SELECT l.id, l.name, l.mbid, l.type, l.country, l.founded,
-               COUNT(DISTINCT r.id) as album_count,
-               GROUP_CONCAT(
-                   JSON_OBJECT(
-                       'album_name', r.title,
-                       'artist_name', r.artist_credit,
-                       'sample_track_id', t.id
-                   )
-               ) as preview_albums_json
+        WITH RankedReleases AS (
+            SELECT 
+                r.label_mbid,
+                r.title,
+                r.artist_credit,
+                MIN(t.id) as sample_track_id,
+                MAX(t.added_at) as latest_add
+            FROM releases r
+            JOIN tracks t ON t.release_mbid = r.mbid AND t.has_art = 1
+            GROUP BY r.id
+        )
+        SELECT 
+            l.id, l.name, l.mbid, l.type, l.country, l.founded,
+            COUNT(DISTINCT r.id) as album_count,
+            (
+                SELECT JSON_GROUP_ARRAY(
+                    JSON_OBJECT(
+                        'album_name', rr.title,
+                        'artist_name', rr.artist_credit,
+                        'sample_track_id', rr.sample_track_id
+                    )
+                )
+                FROM (
+                    SELECT * FROM RankedReleases 
+                    WHERE label_mbid = l.mbid 
+                    ORDER BY latest_add DESC 
+                    LIMIT 4
+                ) rr
+            ) as preview_albums_json
         FROM labels l
         LEFT JOIN releases r ON r.label_mbid = l.mbid
-        LEFT JOIN tracks t ON t.release_mbid = r.mbid AND t.has_art = 1
         WHERE l.name IS NOT NULL AND l.name != '' AND l.name != '[no label]'
         GROUP BY l.id
         HAVING album_count > 0
@@ -1701,7 +1713,7 @@ app.get('/api/labels', (req: Request, res: Response) => {
         let preview_albums = [];
         if (label.preview_albums_json) {
             try {
-                preview_albums = JSON.parse(`[${label.preview_albums_json}]`);
+                preview_albums = JSON.parse(label.preview_albums_json);
             } catch (e) {
                 preview_albums = [];
             }

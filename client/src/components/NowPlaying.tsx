@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { audioEngine, EQBand, BUILT_IN_PRESETS, EQPreset, FilterType } from '../audio/AudioEngine';
 import { Track } from '../types';
+import AddToPlaylistModal from './modals/AddToPlaylistModal';
 
 interface NowPlayingProps {
     isOpen: boolean;
@@ -63,6 +64,7 @@ export function NowPlaying({
     const [deviceProfiles, setDeviceProfiles] = useState<string[]>([]);
     const [currentDevice, setCurrentDevice] = useState(audioEngine.currentDeviceName);
     const [showQueue, setShowQueue] = useState(false);
+    const [showPlaylistModal, setShowPlaylistModal] = useState(false);
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -358,6 +360,14 @@ export function NowPlaying({
                             className={`p-2 transition-colors ${currentTrack?.rating ? 'text-red-500' : 'text-gray-400 hover:text-white'}`}
                         >
                             <Heart size={20} fill={currentTrack?.rating ? 'currentColor' : 'none'} />
+                        </button>
+
+                        <button
+                            onClick={() => currentTrack && setShowPlaylistModal(true)}
+                            className="p-2 transition-colors text-gray-400 hover:text-white"
+                            title="Add to Playlist"
+                        >
+                            <Plus size={20} />
                         </button>
 
                         <div className="flex-1 flex items-center gap-3">
@@ -732,6 +742,14 @@ export function NowPlaying({
                         )}
                     </div>
                 </div>
+            )}
+
+            {/* Add to Playlist Modal */}
+            {showPlaylistModal && currentTrack && (
+                <AddToPlaylistModal
+                    trackIds={[currentTrack.id]}
+                    onClose={() => setShowPlaylistModal(false)}
+                />
             )}
         </div>
     );

@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
-import { X, Play, Disc, ExternalLink } from 'lucide-react';
+import { X, Play, Disc, ExternalLink, Plus, ListMusic, FolderHeart } from 'lucide-react';
+import AddToPlaylistModal from './AddToPlaylistModal';
+import AddToCollectionModal from './AddToCollectionModal';
 import axios from 'axios';
 import type { Track, Artist, Credit } from '../../types';
 
@@ -32,6 +34,11 @@ export default function ArtistDetailModal({
 }: ArtistDetailModalProps) {
     const [artistDetails, setArtistDetails] = useState<ArtistDetails | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [showPlaylistModal, setShowPlaylistModal] = useState(false);
+    const [showCollectionModal, setShowCollectionModal] = useState(false);
+    const [showAddMenu, setShowAddMenu] = useState(false);
+    // For specific album adds
+    const [selectedAlbumForCollection, setSelectedAlbumForCollection] = useState<{ name: string; artist: string } | null>(null);
 
     useEffect(() => {
         const fetchDetails = async () => {
@@ -76,6 +83,41 @@ export default function ArtistDetailModal({
                 >
                     <X size={20} className="text-app-text-muted" />
                 </button>
+                <div className="flex gap-2">
+                    <button
+                        onClick={handlePlayArtist}
+                        className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-full transition-colors"
+                        title="Play All"
+                    >
+                        <Play size={20} fill="currentColor" />
+                    </button>
+                    <div className="relative">
+                        <button
+                            onClick={() => setShowAddMenu(!showAddMenu)}
+                            className="bg-white/10 hover:bg-white/20 text-white p-2 rounded-full transition-colors"
+                            title="Add to Playlist"
+                        >
+                            <Plus size={20} />
+                        </button>
+                        {showAddMenu && (
+                            <div className="absolute top-full right-0 mt-2 w-56 bg-app-bg border border-app-surface rounded-xl shadow-xl overflow-hidden z-[60] animate-in fade-in slide-in-from-top-2 duration-150">
+                                <button
+                                    onClick={() => {
+                                        setShowAddMenu(false);
+                                        setShowPlaylistModal(true);
+                                    }}
+                                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-app-surface transition-colors text-left"
+                                >
+                                    <ListMusic size={18} className="text-app-accent" />
+                                    <div>
+                                        <div className="font-medium text-app-text">Add All to Playlist</div>
+                                        <div className="text-xs text-app-text-muted">Add {tracks.filter(t => t.artist === artist.name).length} tracks</div>
+                                    </div>
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
 
             <div className="max-w-5xl mx-auto px-8 pt-12 pb-32">
@@ -138,7 +180,21 @@ export default function ArtistDetailModal({
                                 className="group cursor-pointer"
                                 onClick={() => onAlbumClick(album.album || album.title, artist.name)}
                             >
-                                <div className="aspect-square bg-app-surface rounded-lg mb-3 overflow-hidden shadow-lg group-hover:shadow-xl transition-all relative">
+                                <div className="aspect-square bg-app-surface rounded-lg mb-3 overflow-hidden shadow-lg group-hover:shadow-xl transition-all relative group/item">
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setSelectedAlbumForCollection({
+                                                name: album.album || album.title,
+                                                artist: artist.name
+                                            });
+                                            setShowCollectionModal(true);
+                                        }}
+                                        className="absolute top-2 right-2 p-1.5 bg-black/60 rounded-full text-white opacity-0 group-hover/item:opacity-100 hover:bg-app-accent hover:scale-110 transition-all z-20"
+                                        title="Add to Collection"
+                                    >
+                                        <FolderHeart size={14} />
+                                    </button>
                                     {album.sample_track_id ? (
                                         <img
                                             src={`${SERVER_URL}/api/art/${album.sample_track_id}`}
@@ -202,6 +258,22 @@ export default function ArtistDetailModal({
                     </div>
                 )}
             </div>
+
+            {/* Modals */}
+            {showPlaylistModal && (
+                <AddToPlaylistModal
+                    trackIds={tracks.filter(t => t.artist === artist.name).map(t => t.id)}
+                    onClose={() => setShowPlaylistModal(false)}
+                />
+            )}
+
+            {showCollectionModal && (
+                <AddToCollectionModal
+                    albumName={selectedAlbumForCollection?.name || ''}
+                    artistName={selectedAlbumForCollection?.artist || ''}
+                    onClose={() => setShowCollectionModal(false)}
+                />
+            )}
         </div>
     );
 }
