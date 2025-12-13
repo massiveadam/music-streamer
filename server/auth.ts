@@ -8,6 +8,11 @@ const JWT_SECRET = process.env.JWT_SECRET || 'music-streamer-secret-key-change-i
 const JWT_EXPIRES_IN = '7d';
 const BCRYPT_ROUNDS = 12;
 
+// Warn if using default JWT secret
+if (!process.env.JWT_SECRET) {
+    console.warn('[AUTH WARNING] Using default JWT secret. Set JWT_SECRET environment variable in production!');
+}
+
 // User type
 export interface User {
     id: number;

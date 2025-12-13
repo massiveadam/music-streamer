@@ -17,7 +17,10 @@ import * as audioAnalyzer from './audioAnalyzer';
 const app = express();
 const PORT = 3001;
 
-app.use(cors());
+app.use(cors({
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:5173', 'http://localhost:3000'],
+    credentials: true
+}));
 app.use(express.json());
 
 // Root route for health check
@@ -491,9 +494,31 @@ app.get('/api/stream/:id', (req: Request, res: Response) => {
     if (!track) return res.status(404).send('Track not found');
 
     const filePath = track.path;
-    const stat = fs.statSync(filePath);
+
+    // Handle missing files gracefully
+    let stat;
+    try {
+        stat = fs.statSync(filePath);
+    } catch (err) {
+        console.error(`[Stream] File not found: ${filePath}`);
+        return res.status(404).send('Audio file not found');
+    }
+
     const fileSize = stat.size;
     const range = req.headers.range;
+
+    // Determine correct MIME type from extension
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeTypes: Record<string, string> = {
+        '.mp3': 'audio/mpeg',
+        '.flac': 'audio/flac',
+        '.m4a': 'audio/mp4',
+        '.wav': 'audio/wav',
+        '.ogg': 'audio/ogg',
+        '.aac': 'audio/aac',
+        '.wma': 'audio/x-ms-wma'
+    };
+    const contentType = mimeTypes[ext] || 'audio/mpeg';
 
     if (range) {
         const parts = range.replace(/bytes=/, "").split("-");
@@ -505,14 +530,14 @@ app.get('/api/stream/:id', (req: Request, res: Response) => {
             'Content-Range': `bytes ${start}-${end}/${fileSize}`,
             'Accept-Ranges': 'bytes',
             'Content-Length': chunksize,
-            'Content-Type': 'audio/mpeg',
+            'Content-Type': contentType,
         };
         res.writeHead(206, head);
         file.pipe(res);
     } else {
         const head = {
             'Content-Length': fileSize,
-            'Content-Type': 'audio/mpeg',
+            'Content-Type': contentType,
         };
         res.writeHead(200, head);
         fs.createReadStream(filePath).pipe(res);
@@ -734,7 +759,7 @@ app.post('/api/favorite', (req: Request, res: Response) => {
 });
 
 // 4. Clear Library (Admin only)
-app.post('/api/clear', auth.requireAdmin, (req: AuthRequest, res: Response) => {
+app.post('/api/clear', auth.authenticateToken, auth.requireAdmin, (req: AuthRequest, res: Response) => {
     const tables = [
         'tracks', 'artists', 'releases', 'labels', 'credits',
         'playlists', 'playlist_tracks', 'listening_history',
@@ -774,7 +799,7 @@ app.post('/api/clear', auth.requireAdmin, (req: AuthRequest, res: Response) => {
 });
 
 // 5. Scan Library (Admin only)
-app.post('/api/scan', auth.requireAdmin, (req: AuthRequest, res: Response) => {
+app.post('/api/scan', auth.authenticateToken, auth.requireAdmin, (req: AuthRequest, res: Response) => {
     const { path: scanPath, limit } = req.body;
     if (!scanPath) return res.status(400).json({ error: 'Missing path' });
 

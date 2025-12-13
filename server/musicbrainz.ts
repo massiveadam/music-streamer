@@ -646,7 +646,7 @@ async function fetchAndStoreCoverArt(mbid: string, releaseGroupId?: string): Pro
 
     // Strategy 1: Try release-specific art from CoverArtArchive
     try {
-        const url = `http://coverartarchive.org/release/${mbid}`;
+        const url = `https://coverartarchive.org/release/${mbid}`;
         const res = await axios.get(url, { validateStatus: () => true, timeout: 10000 });
 
         if (res.status === 200 && res.data.images && res.data.images.length > 0) {
@@ -659,7 +659,7 @@ async function fetchAndStoreCoverArt(mbid: string, releaseGroupId?: string): Pro
     // Strategy 2: Try release-group art as fallback
     if (!foundArt && releaseGroupId) {
         try {
-            const rgUrl = `http://coverartarchive.org/release-group/${releaseGroupId}`;
+            const rgUrl = `https://coverartarchive.org/release-group/${releaseGroupId}`;
             const res = await axios.get(rgUrl, { validateStatus: () => true, timeout: 10000 });
 
             if (res.status === 200 && res.data.images && res.data.images.length > 0) {
@@ -677,7 +677,7 @@ async function fetchAndStoreCoverArt(mbid: string, releaseGroupId?: string): Pro
             const releaseInfo = await mbApi.lookup('release', mbid, ['release-groups']);
             const rgid = (releaseInfo as any)['release-group']?.id;
             if (rgid) {
-                const rgUrl = `http://coverartarchive.org/release-group/${rgid}`;
+                const rgUrl = `https://coverartarchive.org/release-group/${rgid}`;
                 const res = await axios.get(rgUrl, { validateStatus: () => true, timeout: 10000 });
 
                 if (res.status === 200 && res.data.images && res.data.images.length > 0) {
@@ -1152,7 +1152,7 @@ export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ e
                 let lfmArtistBio: { bio: string, image: string } | null = null;
                 const lfmInfo = await lfmArtistPromise;
                 if (lfmInfo && (lfmInfo.description || lfmInfo.image)) {
-                    lfmArtistBio = { bio: lfmInfo.description, image: lfmInfo.image };
+                    lfmArtistBio = { bio: lfmInfo.description || '', image: lfmInfo.image || '' };
                 }
 
                 let lfmDescription: string | null = await lfmAlbumPromise;

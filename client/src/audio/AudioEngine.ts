@@ -246,7 +246,7 @@ class AudioEngine {
     abortCrossfade(): void {
         if (!this.audioCtx) return;
         const now = this.audioCtx.currentTime;
-        
+
         // Cancel all scheduled gain changes
         Object.values(this.decks).forEach(deck => {
             if (deck.gain) {
@@ -321,58 +321,56 @@ class AudioEngine {
         const now = this.audioCtx.currentTime;
         const sampleRate = this.audioCtx.sampleRate;
 
-        // Batch all filter updates to prevent audio glitches
-        const updates: Array<() => void> = [];
-
-        this.filters.forEach((filter, i) => {
+        this.filters.forEach((currentFilter, i) => {
             const band = this.bands[i];
 
             if (band && band.enabled) {
                 // For shelf filters with custom Q, use IIRFilterNode
-                if ((band.type === 'lowshelf' || band.type === 'highshelf') && Math.abs(band.Q - 0.7071) > 0.01) {
-                    const coef = this.calculateShelfCoefficients(band.type, band.frequency, band.gain, band.Q, sampleRate);
+                // IIRFilterNode coefficients cannot be updated, so we must recreate on any parameter change
+                const needsIIR = (band.type === 'lowshelf' || band.type === 'highshelf') && Math.abs(band.Q - 0.7071) > 0.01;
+
+                if (needsIIR) {
+                    const coef = this.calculateShelfCoefficients(band.type as 'lowshelf' | 'highshelf', band.frequency, band.gain, band.Q, sampleRate);
                     const feedforward = [coef.b0 / coef.a0, coef.b1 / coef.a0, coef.b2 / coef.a0];
                     const feedback = [1, coef.a1 / coef.a0, coef.a2 / coef.a0];
 
-                    updates.push(() => {
-                        // Only recreate if type changed
-                        if (!(filter instanceof IIRFilterNode)) {
-                            filter.disconnect();
-                            const newFilter = this.audioCtx!.createIIRFilter(feedforward, feedback);
-                            this.reconnectFilter(i, newFilter);
-                            this.filters[i] = newFilter;
-                        }
-                    });
+                    // Always recreate IIR filter since coefficients can't be updated in-place
+                    currentFilter.disconnect();
+                    const newFilter = this.audioCtx!.createIIRFilter(feedforward, feedback);
+                    this.reconnectFilter(i, newFilter);
+                    this.filters[i] = newFilter;
                 } else {
-                    // Use BiquadFilterNode for simplicity and stability
-                    updates.push(() => {
-                        if (!(filter instanceof BiquadFilterNode)) {
-                            filter.disconnect();
-                            const newFilter = this.audioCtx!.createBiquadFilter();
-                            this.reconnectFilter(i, newFilter);
-                            this.filters[i] = newFilter;
-                        }
+                    // Use BiquadFilterNode for peaking, lowpass, highpass, notch, and default shelf
+                    if (!(currentFilter instanceof BiquadFilterNode)) {
+                        // Need to switch from IIR to Biquad
+                        currentFilter.disconnect();
+                        const newFilter = this.audioCtx!.createBiquadFilter();
+                        this.reconnectFilter(i, newFilter);
+                        this.filters[i] = newFilter;
+                    }
 
-                        const biquad = filter as BiquadFilterNode;
-                        biquad.type = band.type;
-                        // Use shorter ramp time for better responsiveness
-                        biquad.frequency.setTargetAtTime(band.frequency, now, 0.01);
-                        biquad.Q.setTargetAtTime(band.Q, now, 0.01);
-                        biquad.gain.setTargetAtTime(band.gain, now, 0.01);
-                    });
+                    // Now update the biquad parameters - use this.filters[i] to get the current node
+                    const biquad = this.filters[i] as BiquadFilterNode;
+                    biquad.type = band.type;
+                    // Use shorter ramp time for better responsiveness
+                    biquad.frequency.setTargetAtTime(band.frequency, now, 0.01);
+                    biquad.Q.setTargetAtTime(band.Q, now, 0.01);
+                    biquad.gain.setTargetAtTime(band.gain, now, 0.01);
                 }
             } else {
                 // Disabled band -> set to flat with minimal processing
-                updates.push(() => {
-                    if (filter instanceof BiquadFilterNode) {
-                        filter.gain.setTargetAtTime(0, now, 0.01);
-                    }
-                });
+                // Ensure we have a biquad for disabled bands (easier to manage)
+                if (!(currentFilter instanceof BiquadFilterNode)) {
+                    currentFilter.disconnect();
+                    const newFilter = this.audioCtx!.createBiquadFilter();
+                    this.reconnectFilter(i, newFilter);
+                    this.filters[i] = newFilter;
+                }
+                const biquad = this.filters[i] as BiquadFilterNode;
+                biquad.type = 'peaking';
+                biquad.gain.setTargetAtTime(0, now, 0.01);
             }
         });
-
-        // Execute all updates in a single batch
-        updates.forEach(update => update());
     }
 
     private reconnectFilter(index: number, newFilter: BiquadFilterNode | IIRFilterNode): void {
@@ -618,11 +616,11 @@ class AudioEngine {
 
                 const filterMag = new Float32Array(frequencies.length);
                 const filterPhase = new Float32Array(frequencies.length);
-                
+
                 try {
                     // Use a type-safe wrapper for getFrequencyResponse
                     this.safeGetFrequencyResponse(filter, frequencies, filterMag, filterPhase);
-                    
+
                     for (let j = 0; j < frequencies.length; j++) {
                         magResponse[j] *= filterMag[j];
                     }
@@ -653,9 +651,9 @@ class AudioEngine {
         const freqArray = new Float32Array(frequencies);
         const magArray = new Float32Array(magResponse.length);
         const phaseArray = new Float32Array(phaseResponse.length);
-        
+
         filter.getFrequencyResponse(freqArray, magArray, phaseArray);
-        
+
         // Copy results back
         for (let i = 0; i < magResponse.length; i++) {
             magResponse[i] = magArray[i];
