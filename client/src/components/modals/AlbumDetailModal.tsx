@@ -29,6 +29,7 @@ interface AlbumDetailModalProps {
     album: Album;
     tracks: Track[];
     artists: Artist[];
+    matchedTrackIds?: number[]; // Track IDs that matched a search query (for highlighting)
     onClose: () => void;
     onPlayTrack: (index: number, transition: 'cut' | 'crossfade') => void;
     onArtistClick: (artist: Artist) => void;
@@ -43,6 +44,7 @@ export default function AlbumDetailModal({
     album,
     tracks,
     artists,
+    matchedTrackIds = [],
     onClose,
     onPlayTrack,
     onArtistClick,
@@ -107,9 +109,10 @@ export default function AlbumDetailModal({
     // Fetch album metadata
     useEffect(() => {
         const fetchMetadata = async () => {
-            if (!album.tracks[0]?.release_mbid) return;
             try {
-                const res = await axios.get(`${SERVER_URL}/api/album/${album.tracks[0].release_mbid}/metadata`);
+                const res = await axios.get(`${SERVER_URL}/api/album-metadata`, {
+                    params: { album: album.name, artist: album.artist }
+                });
                 setAlbumMetadata(res.data);
             } catch (e) {
                 console.error('Failed to fetch album metadata:', e);
@@ -118,9 +121,8 @@ export default function AlbumDetailModal({
         fetchMetadata();
     }, [album]);
 
-    // Fetch credits when credits tab is active
+    // Fetch credits on mount (needed for inline credits section below tracks)
     useEffect(() => {
-        if (activeTab !== 'credits') return;
         const fetchCredits = async () => {
             try {
                 const res = await axios.get(`${SERVER_URL}/api/credits/album/${encodeURIComponent(album.name)}/${encodeURIComponent(album.artist)}`);
@@ -130,7 +132,7 @@ export default function AlbumDetailModal({
             }
         };
         fetchCredits();
-    }, [activeTab, album.name, album.artist]);
+    }, [album.name, album.artist]);
 
     const handlePlayAlbum = () => {
         const idx = tracks.findIndex(t => t.album === album.name && t.artist === album.artist);
@@ -213,9 +215,12 @@ export default function AlbumDetailModal({
                         <button
                             onClick={() => {
                                 const artist = artists.find(a => a.name === album.artist);
+                                onClose();
                                 if (artist) {
-                                    onClose();
                                     onArtistClick(artist);
+                                } else {
+                                    // Fallback: create minimal artist object if not in database
+                                    onArtistClick({ id: 0, name: album.artist, mbid: null } as any);
                                 }
                             }}
                             className="text-lg text-app-text-muted hover:text-app-text hover:underline self-start mb-4"
@@ -226,31 +231,15 @@ export default function AlbumDetailModal({
                         {/* Metadata Line */}
                         <div className="flex flex-wrap gap-4 text-sm text-app-text-muted font-medium mb-4 items-center">
                             <div className="flex flex-wrap gap-2">
-                                {/* Sonic Tags */}
-                                {sonicTags.map((tag, i) => (
+                                {/* Genre Tags - Primary */}
+                                {(album.genre || album.tracks[0]?.genre || 'Unknown Genre').split(/[,/]/)[0] && (
                                     <span
-                                        key={`sonic-${i}`}
-                                        onClick={() => onTagClick?.(tag)}
-                                        className={`cursor-pointer transition-colors ${onTagClick ? "hover:text-app-accent hover:underline" : ""} text-app-accent`}
-                                        title="Sonic Profile (from Audio Analysis)"
+                                        onClick={() => onTagClick?.((album.genre || album.tracks[0]?.genre || 'Unknown Genre').split(/[,/]/)[0].trim())}
+                                        className={`font-semibold ${onTagClick ? "hover:text-app-accent hover:underline cursor-pointer transition-colors" : ""}`}
                                     >
-                                        ✨ {tag}{(i < sonicTags.length - 1 || (album.genre || album.tracks[0]?.genre)) ? ',' : ''}
+                                        {(album.genre || album.tracks[0]?.genre || 'Unknown Genre').split(/[,/]/)[0].trim()}
                                     </span>
-                                ))}
-
-                                {/* Genre Tags */}
-                                {(album.genre || album.tracks[0]?.genre || 'Unknown Genre').split(/[,/]/).map((g, i, arr) => {
-                                    const genre = g.trim();
-                                    return (
-                                        <span
-                                            key={i}
-                                            onClick={() => onTagClick?.(genre)}
-                                            className={onTagClick ? "hover:text-app-accent hover:underline cursor-pointer transition-colors" : ""}
-                                        >
-                                            {genre}{i < (album.genre || album.tracks[0]?.genre || 'Unknown Genre').split(/[,/]/).length - 1 ? ',' : ''}
-                                        </span>
-                                    );
-                                })}
+                                )}
                             </div>
                             {album.year && (
                                 <>
@@ -279,20 +268,31 @@ export default function AlbumDetailModal({
                             )}
                         </div>
 
-                        {/* Genre Tags */}
-                        {albumMetadata?.tags && albumMetadata.tags.length > 0 && (
-                            <div className="flex flex-wrap gap-2 mt-2">
-                                {albumMetadata.tags.slice(0, 8).map((tag, i) => (
-                                    <span
-                                        key={i}
-                                        className="px-2 py-0.5 rounded-full bg-app-surface/50 border border-app-surface text-xs text-app-text-muted hover:text-white hover:border-app-accent transition-colors cursor-pointer"
-                                        onClick={() => onTagClick?.(tag.name)}
-                                    >
-                                        {tag.name}
-                                    </span>
-                                ))}
-                            </div>
-                        )}
+                        {/* Sub-genre Pills */}
+                        {(() => {
+                            const genreStr = album.genre || album.tracks[0]?.genre || '';
+                            const allGenres = genreStr.split(/[,/]/).map(g => g.trim()).filter(Boolean);
+                            const subGenres = allGenres.slice(1); // All genres after the primary
+                            const mbTags = albumMetadata?.tags?.map(t => t.name) || [];
+                            // Combine sub-genres from file tags and MusicBrainz tags, deduplicated
+                            const allSubGenres = [...new Set([...subGenres, ...mbTags])];
+
+                            if (allSubGenres.length === 0) return null;
+
+                            return (
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                    {allSubGenres.slice(0, 10).map((tag, i) => (
+                                        <span
+                                            key={i}
+                                            className="px-2 py-0.5 rounded-full bg-app-surface/50 border border-app-surface text-xs text-app-text-muted hover:text-white hover:border-app-accent transition-colors cursor-pointer"
+                                            onClick={() => onTagClick?.(tag)}
+                                        >
+                                            {tag}
+                                        </span>
+                                    ))}
+                                </div>
+                            );
+                        })()}
 
                         {/* Action Buttons */}
                         <div className="flex gap-4 mt-6">
@@ -363,7 +363,7 @@ export default function AlbumDetailModal({
                 {/* Stats Row */}
                 <div className="grid md:grid-cols-3 gap-8 mb-8 pb-8 border-b border-app-surface">
                     <div className="md:col-span-2">
-                        <p className="text-sm text-app-text-muted leading-relaxed line-clamp-6">
+                        <p className="text-sm text-app-text-muted leading-relaxed">
                             {albumMetadata?.release?.description
                                 ? albumMetadata.release.description.replace(/<[^>]*>?/gm, '')
                                 : album.tracks[0]?.genre
@@ -402,68 +402,134 @@ export default function AlbumDetailModal({
                 {/* Content */}
                 <div className="space-y-1 pb-32">
                     {activeTab === 'tracks' ? (
-                        album.tracks.map((track, i) => (
-                            <div
-                                key={track.id}
-                                className="group flex items-center gap-4 px-4 py-3 hover:bg-app-surface rounded-md cursor-pointer transition-colors"
-                            >
-                                <div className="w-8 text-center text-sm text-app-text-muted group-hover:text-app-accent font-medium">
-                                    <span className="group-hover:hidden">{i + 1}</span>
-                                    <Play size={14} fill="currentColor" className="hidden group-hover:inline-block" onClick={(e) => {
-                                        e.stopPropagation();
-                                        const idx = tracks.findIndex(t => t.id === track.id);
-                                        if (idx !== -1) {
-                                            onPlayTrack(idx, 'cut');
-                                            onShowNowPlaying();
-                                        }
-                                    }} />
-                                </div>
-                                <div className="flex-1 min-w-0" onClick={() => {
-                                    const idx = tracks.findIndex(t => t.id === track.id);
-                                    if (idx !== -1) {
-                                        onPlayTrack(idx, 'cut');
-                                        onShowNowPlaying();
-                                    }
-                                }}>
-                                    <div className="font-medium text-app-text truncate">{track.title}</div>
-                                    {track.artist !== album.artist && (
-                                        <div className="text-sm text-app-text-muted truncate">{track.artist}</div>
-                                    )}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    {onToggleFavorite && (
-                                        <button
-                                            onClick={(e) => onToggleFavorite(e, track.id)}
-                                            className={`p-1.5 hover:bg-white/10 rounded-full transition-all ${track.rating === 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-                                        >
-                                            <svg className={`w-4 h-4 transition-colors ${track.rating === 1 ? 'text-app-accent fill-app-accent' : 'text-app-text-muted'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                                            </svg>
-                                        </button>
-                                    )}
-                                    {/* Add to Playlist button */}
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setTrackToAdd(track.id);
-                                            setShowPlaylistModal(true);
-                                        }}
-                                        className="p-1.5 opacity-0 group-hover:opacity-100 hover:bg-white/10 rounded-full transition-all"
-                                        title="Add to playlist"
+                        <>
+                            {album.tracks.map((track, i) => {
+                                const isMatched = matchedTrackIds.length > 0 && matchedTrackIds.includes(track.id);
+                                return (
+                                    <div
+                                        key={track.id}
+                                        className={`group flex items-center gap-4 px-4 py-3 hover:bg-app-surface rounded-md cursor-pointer transition-colors ${isMatched ? 'bg-app-accent/10 border-l-2 border-app-accent' : ''}`}
                                     >
-                                        <Plus size={16} className="text-app-text-muted hover:text-app-accent" />
-                                    </button>
-                                    <div className="text-sm text-app-text-muted font-medium">
-                                        {Math.floor(track.duration / 60)}:{(Math.floor(track.duration % 60)).toString().padStart(2, '0')}
+                                        <div className="w-8 text-center text-sm text-app-text-muted group-hover:text-app-accent font-medium">
+                                            <span className="group-hover:hidden">{i + 1}</span>
+                                            <Play size={14} fill="currentColor" className="hidden group-hover:inline-block" onClick={(e) => {
+                                                e.stopPropagation();
+                                                const idx = tracks.findIndex(t => t.id === track.id);
+                                                if (idx !== -1) {
+                                                    onPlayTrack(idx, 'cut');
+                                                    onShowNowPlaying();
+                                                }
+                                            }} />
+                                        </div>
+                                        <div className="flex-1 min-w-0" onClick={() => {
+                                            const idx = tracks.findIndex(t => t.id === track.id);
+                                            if (idx !== -1) {
+                                                onPlayTrack(idx, 'cut');
+                                                onShowNowPlaying();
+                                            }
+                                        }}>
+                                            <div className="font-medium text-app-text truncate">{track.title}</div>
+                                            {track.artist !== album.artist && (
+                                                <div className="text-sm text-app-text-muted truncate">{track.artist}</div>
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {onToggleFavorite && (
+                                                <button
+                                                    onClick={(e) => onToggleFavorite(e, track.id)}
+                                                    className={`p-1.5 hover:bg-white/10 rounded-full transition-all ${track.rating === 1 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                                                >
+                                                    <svg className={`w-4 h-4 transition-colors ${track.rating === 1 ? 'text-app-accent fill-app-accent' : 'text-app-text-muted'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                                                    </svg>
+                                                </button>
+                                            )}
+                                            {/* Add to Playlist button */}
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setTrackToAdd(track.id);
+                                                    setShowPlaylistModal(true);
+                                                }}
+                                                className="p-1.5 opacity-0 group-hover:opacity-100 hover:bg-white/10 rounded-full transition-all"
+                                                title="Add to playlist"
+                                            >
+                                                <Plus size={16} className="text-app-text-muted hover:text-app-accent" />
+                                            </button>
+                                            <div className="text-sm text-app-text-muted font-medium">
+                                                {Math.floor(track.duration / 60)}:{(Math.floor(track.duration % 60)).toString().padStart(2, '0')}
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                            </div>
-                        ))
+                                );
+                            })}
+
+                            {/* Credits Section - Below Tracks */}
+                            {(() => {
+                                // Filter out empty credits
+                                const validCredits = albumCredits.filter(c => c.name && c.name.trim() !== '');
+                                if (validCredits.length === 0 && !albumMetadata?.label) return null;
+
+                                const grouped = validCredits.reduce((acc: Record<string, any[]>, c) => {
+                                    const role = c.role || 'Unknown';
+                                    if (!acc[role]) acc[role] = [];
+                                    acc[role].push(c);
+                                    return acc;
+                                }, {});
+
+                                return (
+                                    <div className="mt-8 pt-6 border-t border-app-surface">
+                                        <h3 className="text-lg font-bold text-app-text mb-4">Credits</h3>
+
+                                        <div className="space-y-4">
+                                            {Object.entries(grouped).slice(0, 6).map(([role, credits]) => (
+                                                <div key={role} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                                                    <span className="text-sm font-medium text-app-text-muted uppercase tracking-wider min-w-[120px]">{role}</span>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {(credits as any[]).slice(0, 5).map((c, i) => (
+                                                            <span
+                                                                key={i}
+                                                                className="text-sm text-app-text hover:text-app-accent cursor-pointer transition-colors"
+                                                                onClick={() => onTagClick?.(c.name)}
+                                                            >
+                                                                {c.name}{i < Math.min((credits as any[]).length, 5) - 1 ? ',' : ''}
+                                                            </span>
+                                                        ))}
+                                                        {(credits as any[]).length > 5 && (
+                                                            <span className="text-sm text-app-text-muted">+{(credits as any[]).length - 5} more</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {Object.keys(grouped).length > 6 && (
+                                                <button
+                                                    onClick={() => setActiveTab('credits')}
+                                                    className="text-sm text-app-accent hover:underline"
+                                                >
+                                                    View all credits →
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {/* Copyright Info - at bottom */}
+                                        {(album.year || albumMetadata?.label) && (
+                                            <div className="mt-6 pt-4 border-t border-app-surface/50 text-sm text-app-text-muted">
+                                                © {album.year || ''} {albumMetadata?.label?.name || album.artist}
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+                        </>
                     ) : (
                         <div className="space-y-4">
-                            {albumCredits.length > 0 ? (
-                                Object.entries(
-                                    albumCredits.reduce((acc: Record<string, any[]>, c) => {
+                            {(() => {
+                                const validCredits = albumCredits.filter(c => c.name && c.name.trim() !== '');
+                                if (validCredits.length === 0) {
+                                    return <p className="text-app-text-muted text-center py-8">No credits available for this album.</p>;
+                                }
+                                return Object.entries(
+                                    validCredits.reduce((acc: Record<string, any[]>, c) => {
                                         const role = c.role || 'Unknown';
                                         if (!acc[role]) acc[role] = [];
                                         acc[role].push(c);
@@ -473,7 +539,7 @@ export default function AlbumDetailModal({
                                     <div key={role} className="border-b border-app-surface pb-4">
                                         <h3 className="text-sm font-bold text-app-text-muted uppercase tracking-wider mb-2">{role}</h3>
                                         <div className="flex flex-wrap gap-2">
-                                            {(credits as any[]).map((c, i) => (
+                                            {(credits as any[]).filter(c => c.name && c.name.trim() !== '').map((c, i) => (
                                                 <span
                                                     key={i}
                                                     className="px-3 py-1 bg-app-surface rounded-full text-sm text-app-text hover:bg-app-accent/20 cursor-pointer transition-colors"
@@ -484,10 +550,8 @@ export default function AlbumDetailModal({
                                             ))}
                                         </div>
                                     </div>
-                                ))
-                            ) : (
-                                <p className="text-app-text-muted text-center py-8">No credits available for this album.</p>
-                            )}
+                                ));
+                            })()}
                         </div>
                     )}
                 </div>

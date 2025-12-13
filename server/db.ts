@@ -134,13 +134,6 @@ db.exec(`
   )
 `);
 
-// Create index for faster lookups
-try {
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_artist_mbid ON credits(artist_mbid)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_tracks_mbid ON tracks(mbid)`);
-} catch (e) { /* indexes may exist */ }
-
 // Labels Table
 db.exec(`
   CREATE TABLE IF NOT EXISTS labels (
@@ -231,7 +224,6 @@ try {
 
   // Optimize Credits Search
   db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_role ON credits(role)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_name ON credits(name)`);
 } catch (e) { /* Index or dedup might fail on empty table */ }
 
 // Playlists table

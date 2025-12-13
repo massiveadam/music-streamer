@@ -500,8 +500,8 @@ function MusicPlayer() {
     const timer = setTimeout(async () => {
       if (searchQuery) {
         try {
-          const res = await axios.get(`${SERVER_URL}/api/search?q=${encodeURIComponent(searchQuery)}`);
-          setTracks(res.data.tracks || res.data);
+          const res = await axios.get(`${SERVER_URL}/api/search?q=${encodeURIComponent(searchQuery)}&limit=200`);
+          setTracks(res.data.results || res.data);
         } catch (e) { console.error(e); }
       } else if (!moodFilter) {
         // Only fetch all if no mood filter either
@@ -583,6 +583,7 @@ function MusicPlayer() {
   };
 
   const [selectedAlbum, setSelectedAlbum] = useState(null);
+  const [matchedTrackIds, setMatchedTrackIds] = useState<number[]>([]); // Track IDs from search results to highlight
   const [selectedArtist, setSelectedArtist] = useState(null); // New Artist Detail State
   const [artistDetails, setArtistDetails] = useState(null); // { artist, credits, albums, totalTracks }
 
@@ -1017,11 +1018,33 @@ function MusicPlayer() {
                                     <div
                                       key={album.release_mbid || album.album}
                                       className="group cursor-pointer"
-                                      onClick={() => {
-                                        const target = albums.find(a => a.name === album.album);
+                                      onClick={async () => {
+                                        // First try to find in current albums
+                                        const target = albums.find(a => a.name === album.album && a.artist === artistDetails.artist.name);
                                         if (target) {
                                           setSelectedArtist(null);
                                           setSelectedAlbum(target);
+                                        } else {
+                                          // Fallback: fetch all tracks, then find album
+                                          try {
+                                            const res = await axios.get(`${SERVER_URL}/api/tracks`);
+                                            const allTracks = res.data;
+                                            setTracks(allTracks);
+                                            // Find album from fetched tracks
+                                            const albumTracks = allTracks.filter((t: Track) => t.album === album.album && t.artist === artistDetails.artist.name);
+                                            if (albumTracks.length > 0) {
+                                              setSelectedArtist(null);
+                                              setSelectedAlbum({
+                                                name: album.album,
+                                                artist: artistDetails.artist.name,
+                                                tracks: albumTracks,
+                                                year: albumTracks[0]?.year || null,
+                                                genre: albumTracks[0]?.genre || null
+                                              });
+                                            }
+                                          } catch (e) {
+                                            console.error('Failed to fetch tracks:', e);
+                                          }
                                         }
                                       }}
                                     >
@@ -1175,7 +1198,33 @@ function MusicPlayer() {
                         <div
                           key={album.name}
                           className="group cursor-pointer"
-                          onClick={() => setSelectedAlbum(album)}
+                          onClick={async () => {
+                            // Remember which tracks matched the search (for highlighting)
+                            const matchedIds = album.tracks.map((t: Track) => t.id);
+                            // If this is from a filtered search view, fetch full album
+                            if (searchQuery) {
+                              try {
+                                const res = await axios.get(`${SERVER_URL}/api/tracks`);
+                                const allTracks = res.data.tracks || res.data;
+                                // Match by album name only (artist may differ for features/compilations)
+                                const fullAlbumTracks = allTracks.filter((t: Track) => t.album === album.name);
+                                if (fullAlbumTracks.length > 0) {
+                                  // Only show highlights if less than 80% of tracks matched
+                                  const matchRatio = matchedIds.length / fullAlbumTracks.length;
+                                  setMatchedTrackIds(matchRatio < 0.8 ? matchedIds : []);
+                                  setSelectedAlbum({ ...album, tracks: fullAlbumTracks });
+                                } else {
+                                  setMatchedTrackIds(matchedIds);
+                                  setSelectedAlbum(album);
+                                }
+                              } catch (e) {
+                                setSelectedAlbum(album);
+                              }
+                            } else {
+                              setMatchedTrackIds([]); // No search - no highlighting needed
+                              setSelectedAlbum(album);
+                            }
+                          }}
                         >
                           {/* Album Art Card */}
                           <div className="aspect-square bg-app-surface rounded-lg mb-3 flex items-center justify-center group-hover:bg-app-accent/10 transition-colors relative overflow-hidden shadow-lg">
@@ -1534,6 +1583,7 @@ function MusicPlayer() {
               album={selectedAlbum}
               tracks={tracks}
               artists={artists}
+              matchedTrackIds={matchedTrackIds}
               onClose={() => setSelectedAlbum(null)}
               onPlayTrack={playTrack}
               onShowNowPlaying={() => setShowNowPlaying(true)}

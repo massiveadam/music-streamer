@@ -1,5 +1,5 @@
 import { useState, useEffect, memo } from 'react';
-import { Disc, Sparkles } from 'lucide-react';
+import { Disc } from 'lucide-react';
 import axios from 'axios';
 
 const SERVER_URL = 'http://localhost:3001';
@@ -50,10 +50,9 @@ function SimilarAlbumsSection({ currentAlbum, currentArtist, onAlbumClick }: Sim
         return (
             <div className="mt-8 pt-6 border-t border-white/10">
                 <h3 className="text-lg font-bold text-app-text mb-4 flex items-center gap-2">
-                    <Sparkles size={18} className="text-app-accent" />
                     Similar Albums
                 </h3>
-                <div className="flex gap-4 overflow-x-auto pb-2">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 pb-2">
                     {[...Array(4)].map((_, i) => (
                         <div key={i} className="w-32 shrink-0 animate-pulse">
                             <div className="w-32 h-32 bg-app-surface rounded-lg" />
@@ -72,19 +71,17 @@ function SimilarAlbumsSection({ currentAlbum, currentArtist, onAlbumClick }: Sim
 
     return (
         <div className="mt-8 pt-6 border-t border-white/10">
-            <h3 className="text-lg font-bold text-app-text mb-4 flex items-center gap-2">
-                <Sparkles size={18} className="text-app-accent" />
+            <h3 className="text-lg font-bold text-app-text mb-4">
                 Similar Albums
             </h3>
-            <div className="flex gap-4 overflow-x-auto pb-2 no-scrollbar">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 pb-2">
                 {similarAlbums.map((album, i) => (
                     <div
                         key={`${album.album}-${album.artist}-${i}`}
-                        className="w-32 shrink-0 cursor-pointer group"
+                        className="cursor-pointer group"
                         onClick={() => onAlbumClick({ name: album.album, artist: album.artist })}
                     >
-                        {/* Album Art */}
-                        <div className="w-32 h-32 bg-app-surface rounded-lg overflow-hidden shadow-lg group-hover:shadow-xl transition-shadow relative">
+                        <div className="aspect-square bg-app-surface rounded-lg overflow-hidden shadow-lg group-hover:shadow-xl transition-shadow relative">
                             {album.has_art && album.sample_track_id ? (
                                 <img
                                     src={`${SERVER_URL}/api/art/${album.sample_track_id}`}

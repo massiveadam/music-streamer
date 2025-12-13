@@ -102,10 +102,13 @@ let enrichmentStatus: EnrichmentStatus = {
 // Cache for fetched releases to avoid duplicate API calls
 const releaseCache = new Map<string, MBRelease>();
 const artistCache = new Map<string, MBArtist>();
+// Session caches for expensive external API calls (Wikipedia, release-group tags)
+const wikiDescriptionCache = new Map<string, string | null>(); // album_artist -> description
+const releaseGroupTagsCache = new Map<string, MBTag[]>(); // release-group-id -> tags
 
 // Rate limiter for parallel workers
 let lastRequestTime = 0;
-const MIN_REQUEST_INTERVAL = 1100; // 1.1 seconds between requests
+const MIN_REQUEST_INTERVAL = 1000; // 1 second (MusicBrainz allows 1 req/sec)
 
 async function rateLimitedRequest<T>(fn: () => Promise<T>): Promise<T> {
     const now = Date.now();
@@ -381,6 +384,93 @@ function mapRelationType(type?: string): string {
 }
 
 /**
+ * Fetch album description from Wikipedia API
+ * Tries multiple title variations for best match
+ */
+async function fetchWikipediaDescription(albumTitle: string, artistName: string): Promise<string | null> {
+    const cacheKey = `${albumTitle.toLowerCase()}|||${artistName.toLowerCase()}`;
+
+    // Check cache first
+    if (wikiDescriptionCache.has(cacheKey)) {
+        return wikiDescriptionCache.get(cacheKey) || null;
+    }
+
+    const cleanedAlbum = cleanSearchTerm(albumTitle);
+
+    // Try different Wikipedia title patterns
+    const titlePatterns = [
+        `${cleanedAlbum}_(album)`,
+        `${cleanedAlbum}_(${artistName}_album)`,
+        cleanedAlbum,
+    ];
+
+    for (const pattern of titlePatterns) {
+        try {
+            const encoded = encodeURIComponent(pattern.replace(/\s+/g, '_'));
+            const res = await axios.get(
+                `https://en.wikipedia.org/api/rest_v1/page/summary/${encoded}`,
+                {
+                    timeout: 5000,
+                    headers: { 'User-Agent': 'OpenStream/1.0' }
+                }
+            );
+
+            if (res.data && res.data.extract && res.data.type !== 'disambiguation') {
+                console.log(`[Wikipedia] Found description for "${albumTitle}" via pattern: ${pattern}`);
+                wikiDescriptionCache.set(cacheKey, res.data.extract);
+                return res.data.extract;
+            }
+        } catch (e) {
+            // Try next pattern
+        }
+    }
+
+    console.log(`[Wikipedia] No description found for "${albumTitle}" by ${artistName}`);
+    wikiDescriptionCache.set(cacheKey, null);
+    return null;
+}
+
+/**
+ * Fetch release-group tags from MusicBrainz
+ * Returns all tags (not limited) for richer metadata
+ */
+async function fetchReleaseGroupTags(releaseGroupId: string): Promise<MBTag[]> {
+    // Check cache first
+    if (releaseGroupTagsCache.has(releaseGroupId)) {
+        return releaseGroupTagsCache.get(releaseGroupId) || [];
+    }
+
+    try {
+        const url = `https://musicbrainz.org/ws/2/release-group/${releaseGroupId}?fmt=json&inc=tags+genres`;
+        const res = await axios.get(url, {
+            headers: { 'User-Agent': 'OpenStream/1.0' },
+            timeout: 5000
+        });
+
+        // Combine tags and genres (genres are a subset of tags in MB)
+        const tags: MBTag[] = [];
+        if (res.data.tags) {
+            tags.push(...res.data.tags);
+        }
+        if (res.data.genres) {
+            for (const genre of res.data.genres) {
+                if (!tags.find(t => t.name === genre.name)) {
+                    tags.push({ name: genre.name, count: genre.count });
+                }
+            }
+        }
+
+        console.log(`[MusicBrainz] Found ${tags.length} tags for release-group ${releaseGroupId}`);
+        const sortedTags = tags.sort((a, b) => (b.count || 0) - (a.count || 0));
+        releaseGroupTagsCache.set(releaseGroupId, sortedTags);
+        return sortedTags;
+    } catch (e) {
+        console.error(`[MusicBrainz] Failed to fetch release-group tags:`, (e as Error).message);
+        return [];
+    }
+}
+
+/**
  * Store credits from MusicBrainz relations
  */
 function storeCredits(trackId: number, relations: MBRelation[]): void {
@@ -427,31 +517,34 @@ function storeCredits(trackId: number, relations: MBRelation[]): void {
 
 /**
  * Upsert a Tag and link it to an entity
+ * Optimized with prepared statement caching and conflict handling
  */
+// Cached prepared statements for tag operations
+const preparedStatements = {
+    selectTag: db.prepare('SELECT id FROM tags WHERE name = ?'),
+    insertTag: db.prepare('INSERT OR IGNORE INTO tags (name) VALUES (?)'),
+    insertEntityTag: db.prepare(`
+        INSERT OR IGNORE INTO entity_tags (entity_type, entity_id, tag_id, count)
+        VALUES (?, ?, ?, ?)
+    `),
+};
+
 function storeEntityTags(entityType: string, entityId: number | null, tags: MBTag[]): void {
     if (!tags || !tags.length || !entityId) return;
 
-    const sortedTags = tags.sort((a, b) => (b.count || 0) - (a.count || 0)).slice(0, 10);
+    // Sort by count but keep ALL tags (no limit)
+    const sortedTags = tags.sort((a, b) => (b.count || 0) - (a.count || 0));
 
     for (const tag of sortedTags) {
-        let tagId: number;
-        const existingTag = db.prepare('SELECT id FROM tags WHERE name = ?').get(tag.name) as { id: number } | undefined;
+        // Insert tag if not exists
+        preparedStatements.insertTag.run(tag.name);
 
-        if (existingTag) {
-            tagId = existingTag.id;
-        } else {
-            const info = db.prepare('INSERT INTO tags (name) VALUES (?)').run(tag.name);
-            tagId = Number(info.lastInsertRowid);
-        }
+        // Get tag ID (will exist after INSERT OR IGNORE)
+        const existingTag = preparedStatements.selectTag.get(tag.name) as { id: number } | undefined;
+        if (!existingTag) continue;
 
-        try {
-            db.prepare(`
-        INSERT INTO entity_tags (entity_type, entity_id, tag_id, count)
-        VALUES (?, ?, ?, ?)
-      `).run(entityType, entityId, tagId, tag.count || 1);
-        } catch (e) {
-            // Probably already exists
-        }
+        // Link tag to entity (ignore duplicates)
+        preparedStatements.insertEntityTag.run(entityType, entityId, existingTag.id, tag.count || 1);
     }
 }
 
@@ -496,7 +589,7 @@ function upsertRelease(releaseData: MBRelease): number | null {
         }
     }
 
-    const info = db.prepare(`
+    db.prepare(`
     INSERT INTO releases (mbid, title, release_date, country, barcode, label_mbid, status, packaging, description, primary_type)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(mbid) DO UPDATE SET description = excluded.description, primary_type = COALESCE(excluded.primary_type, releases.primary_type)
@@ -513,7 +606,9 @@ function upsertRelease(releaseData: MBRelease): number | null {
         releaseData['release-group']?.['primary-type'] || null
     );
 
-    return Number(info.lastInsertRowid);
+    // Re-query to get correct ID (lastInsertRowid is unreliable with ON CONFLICT DO UPDATE)
+    const inserted = db.prepare('SELECT id FROM releases WHERE mbid = ?').get(releaseData.id) as { id: number } | undefined;
+    return inserted ? inserted.id : null;
 }
 
 /**
@@ -597,11 +692,23 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
                         WHERE id = ?
                     `).run(genre, styles, discogsData.year, track.id);
 
-                    // Store styles as tags (like RYM descriptors)
+                    // Store styles as tags using proper tag_id reference
                     if (discogsData.styles.length > 0) {
-                        const storeTag = db.prepare('INSERT OR IGNORE INTO entity_tags (entity_type, entity_id, tag, source) VALUES (?, ?, ?, ?)');
                         for (const style of discogsData.styles) {
-                            storeTag.run('track', track.id, style.toLowerCase(), 'discogs');
+                            const styleName = style.toLowerCase();
+                            // Find or create tag
+                            let tagId: number;
+                            const existingTag = db.prepare('SELECT id FROM tags WHERE name = ?').get(styleName) as { id: number } | undefined;
+                            if (existingTag) {
+                                tagId = existingTag.id;
+                            } else {
+                                const info = db.prepare('INSERT INTO tags (name) VALUES (?)').run(styleName);
+                                tagId = Number(info.lastInsertRowid);
+                            }
+                            // Link tag to track
+                            try {
+                                db.prepare('INSERT INTO entity_tags (entity_type, entity_id, tag_id, count) VALUES (?, ?, ?, ?)').run('track', track.id, tagId, 1);
+                            } catch (e) { /* already exists */ }
                         }
                     }
 
@@ -651,10 +758,27 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
         } catch (e) { }
     }
 
+    // Wikipedia description (prioritize over Last.fm)
+    let wikiDescription: string | null = null;
+    if (track.album) {
+        try {
+            wikiDescription = await fetchWikipediaDescription(track.album, track.artist);
+        } catch (e) { }
+    }
+
+    // Release-group tags (richer than release tags)
+    let releaseGroupTags: MBTag[] = [];
+    if (releaseFull && (releaseFull as any)['release-group']?.id) {
+        try {
+            releaseGroupTags = await fetchReleaseGroupTags((releaseFull as any)['release-group'].id);
+        } catch (e) { }
+    }
+
     // 2. WRITE PHASE (Transaction)
     const txn = db.transaction(() => {
-        // Compute genre from tags (use first tag as primary genre)
+        // Compute genre from all tags (use first tag as primary genre)
         const allTags = [
+            ...releaseGroupTags,  // Release-group tags first (best quality)
             ...(details.tags || []),
             ...(releaseFull?.tags || []),
             ...(artistFull?.tags || []),
@@ -676,11 +800,14 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
         if (details.tags) storeEntityTags('track', track.id, details.tags);
 
         if (releaseFull) {
-            releaseFull.description = lfmDescription || undefined;
+            // Use Wikipedia description if available, fallback to Last.fm
+            releaseFull.description = wikiDescription || lfmDescription || undefined;
             const releaseId = upsertRelease(releaseFull);
 
             db.prepare('UPDATE tracks SET release_mbid = ? WHERE id = ?').run(releaseFull.id, track.id);
 
+            // Store all tags from all sources
+            if (releaseGroupTags.length > 0) storeEntityTags('release', releaseId, releaseGroupTags);
             if (releaseFull.tags) storeEntityTags('release', releaseId, releaseFull.tags);
             if (lfmAlbumTags.length > 0) storeEntityTags('release', releaseId, lfmAlbumTags);
         }
@@ -699,9 +826,11 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
         return { success: false, reason: "Database error during write" };
     }
 
-    // 3. POST-TRANSACTION (External resources)
+    // 3. POST-TRANSACTION (External resources) - fire-and-forget, don't block enrichment
     if (matchedRelease) {
-        await fetchAndStoreCoverArt(matchedRelease.id);
+        fetchAndStoreCoverArt(matchedRelease.id).catch(e =>
+            console.error(`Cover art fetch error: ${(e as Error).message}`)
+        );
     }
 
     return { success: true, mbid: recording.id };
@@ -782,7 +911,15 @@ export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ e
     }
 
     // Get all unenriched tracks grouped by album
-    const tracks = db.prepare('SELECT * FROM tracks WHERE enriched IS NULL OR enriched = 0').all() as Track[];
+    // OPTIMIZATION: Prioritize albums with art (more likely to be complete/high-quality)
+    const tracks = db.prepare(`
+        SELECT * FROM tracks 
+        WHERE enriched IS NULL OR enriched = 0 
+        ORDER BY 
+            CASE WHEN has_art = 1 THEN 0 ELSE 1 END,
+            CASE WHEN genre IS NOT NULL THEN 0 ELSE 1 END,
+            album, artist
+    `).all() as Track[];
 
     if (tracks.length === 0) {
         return { message: 'All tracks already enriched' };
@@ -799,11 +936,17 @@ export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ e
     }
 
     const albums = Array.from(albumGroups.entries());
-    console.log(`Starting album-based enrichment: ${tracks.length} tracks in ${albums.length} albums with ${workerCount} workers...`);
 
-    // Clear caches for fresh run
+    // OPTIMIZATION: Dynamic worker count based on library size
+    // More workers for larger libraries, up to 8
+    const dynamicWorkerCount = Math.min(8, Math.max(workerCount, Math.ceil(albums.length / 50)));
+    console.log(`Starting album-based enrichment: ${tracks.length} tracks in ${albums.length} albums with ${dynamicWorkerCount} workers...`);
+
+    // Clear caches for fresh run (including new session caches)
     releaseCache.clear();
     artistCache.clear();
+    wikiDescriptionCache.clear();
+    releaseGroupTagsCache.clear();
 
     enrichmentStatus = {
         isEnriching: true,
@@ -1002,7 +1145,7 @@ export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ e
     }
 
     // Start parallel workers
-    const workers = Array(workerCount).fill(null).map(() => processNextAlbum());
+    const workers = Array(dynamicWorkerCount).fill(null).map(() => processNextAlbum());
     await Promise.all(workers);
 
     enrichmentStatus.isEnriching = false;
