@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { X, Play, Disc, Plus, RefreshCcw, ListMusic, FolderHeart } from 'lucide-react';
+import { X, Play, Disc, Plus, RefreshCcw, ListMusic, FolderHeart, MoreVertical, Search, Pencil, RotateCcw, Merge } from 'lucide-react';
 import axios from 'axios';
 import type { Track, Artist } from '../../types';
 import AddToPlaylistModal from './AddToPlaylistModal';
 import AddToCollectionModal from './AddToCollectionModal';
+import SearchMatchModal from './SearchMatchModal';
+import EditMetadataModal from './EditMetadataModal';
+import MergeAlbumsModal from './MergeAlbumsModal';
 import SimilarAlbumsSection from '../SimilarAlbumsSection';
 import { getTrackProfiles } from '../../utils/sonicProfiles';
 
@@ -64,6 +67,15 @@ export default function AlbumDetailModal({
     const [showCollectionModal, setShowCollectionModal] = useState(false);
     const [trackToAdd, setTrackToAdd] = useState<number | null>(null);
     const addMenuRef = useRef<HTMLDivElement>(null);
+
+    // Metadata management states
+    const [showKebabMenu, setShowKebabMenu] = useState(false);
+    const [showSearchModal, setShowSearchModal] = useState(false);
+    const [showEditModal, setShowEditModal] = useState(false);
+    const [showMergeModal, setShowMergeModal] = useState(false);
+    const [isReEnriching, setIsReEnriching] = useState(false);
+    const [enrichmentProgress, setEnrichmentProgress] = useState<{ step: string; percent: number } | null>(null);
+    const kebabMenuRef = useRef<HTMLDivElement>(null);
 
     // Calculate Sonic Tags
     const sonicTags = useMemo(() => {
@@ -154,8 +166,98 @@ export default function AlbumDetailModal({
                 >
                     <X size={20} className="text-app-text-muted" />
                 </button>
-                <div className="flex gap-2 text-sm text-app-text-muted">
-                    {/* Breadcrumb or additional controls could go here */}
+                <div className="flex gap-2 text-sm text-app-text-muted items-center">
+                    {/* Kebab Menu for Metadata Management */}
+                    <div className="relative" ref={kebabMenuRef}>
+                        <button
+                            onClick={() => setShowKebabMenu(!showKebabMenu)}
+                            className="p-2 hover:bg-app-surface rounded-lg transition-colors"
+                            title="Album options"
+                        >
+                            <MoreVertical size={18} className="text-app-text-muted" />
+                        </button>
+
+                        {showKebabMenu && (
+                            <div className="absolute right-0 top-full mt-1 bg-app-surface border border-app-border rounded-lg shadow-xl z-50 py-1 min-w-[180px]">
+                                <button
+                                    onClick={() => {
+                                        setShowSearchModal(true);
+                                        setShowKebabMenu(false);
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-sm text-app-text hover:bg-app-accent/10 flex items-center gap-2"
+                                >
+                                    <Search size={16} />
+                                    Fix Match...
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setShowEditModal(true);
+                                        setShowKebabMenu(false);
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-sm text-app-text hover:bg-app-accent/10 flex items-center gap-2"
+                                >
+                                    <Pencil size={16} />
+                                    Edit Metadata
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setShowMergeModal(true);
+                                        setShowKebabMenu(false);
+                                    }}
+                                    className="w-full px-4 py-2 text-left text-sm text-app-text hover:bg-app-accent/10 flex items-center gap-2"
+                                >
+                                    <Merge size={16} />
+                                    Merge Albums...
+                                </button>
+                                <button
+                                    onClick={async () => {
+                                        setShowKebabMenu(false);
+                                        setIsReEnriching(true);
+                                        setEnrichmentProgress({ step: 'Starting...', percent: 0 });
+                                        try {
+                                            setEnrichmentProgress({ step: 'Resetting metadata...', percent: 20 });
+                                            await axios.post(`${SERVER_URL}/api/album/re-enrich`, {
+                                                album: album.name,
+                                                artist: album.artist
+                                            }, {
+                                                headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+                                            });
+
+                                            // Poll for completion
+                                            setEnrichmentProgress({ step: 'Fetching from MusicBrainz...', percent: 40 });
+                                            await new Promise(r => setTimeout(r, 2000));
+
+                                            setEnrichmentProgress({ step: 'Fetching description...', percent: 60 });
+                                            await new Promise(r => setTimeout(r, 1500));
+
+                                            setEnrichmentProgress({ step: 'Fetching cover art...', percent: 80 });
+                                            await new Promise(r => setTimeout(r, 1500));
+
+                                            setEnrichmentProgress({ step: 'Refreshing data...', percent: 95 });
+                                            // Refresh metadata
+                                            const res = await axios.get(`${SERVER_URL}/api/album-metadata`, {
+                                                params: { album: album.name, artist: album.artist }
+                                            });
+                                            setAlbumMetadata(res.data);
+                                            setEnrichmentProgress({ step: 'Complete!', percent: 100 });
+                                            await new Promise(r => setTimeout(r, 500));
+                                        } catch (e) {
+                                            console.error('Re-enrich failed:', e);
+                                            setEnrichmentProgress({ step: 'Error!', percent: 0 });
+                                        } finally {
+                                            setIsReEnriching(false);
+                                            setEnrichmentProgress(null);
+                                        }
+                                    }}
+                                    disabled={isReEnriching}
+                                    className="w-full px-4 py-2 text-left text-sm text-app-text hover:bg-app-accent/10 flex items-center gap-2 disabled:opacity-50"
+                                >
+                                    <RotateCcw size={16} className={isReEnriching ? 'animate-spin' : ''} />
+                                    {isReEnriching ? 'Re-enriching...' : 'Re-enrich Album'}
+                                </button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
 
@@ -182,6 +284,22 @@ export default function AlbumDetailModal({
                                         <Disc size={64} className="text-app-text-muted" />
                                     </div>
                                 )}
+
+                                {/* Re-enrichment Progress Overlay */}
+                                {isReEnriching && enrichmentProgress && (
+                                    <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center p-4">
+                                        <RotateCcw size={32} className="text-app-accent animate-spin mb-3" />
+                                        <div className="text-white text-sm font-medium mb-2">{enrichmentProgress.step}</div>
+                                        <div className="w-full bg-white/20 rounded-full h-2 overflow-hidden">
+                                            <div
+                                                className="bg-app-accent h-full transition-all duration-300"
+                                                style={{ width: `${enrichmentProgress.percent}%` }}
+                                            />
+                                        </div>
+                                        <div className="text-white/60 text-xs mt-1">{enrichmentProgress.percent}%</div>
+                                    </div>
+                                )}
+
                                 {albumMetadata?.images?.find(i => i.type === 'back') && (
                                     <div className="absolute bottom-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1.5 rounded-full backdrop-blur-sm transition-colors" title="View Back Cover">
                                         <RefreshCcw size={14} />
@@ -597,6 +715,53 @@ export default function AlbumDetailModal({
                     />
                 )
             }
+
+            {/* Search & Match Modal */}
+            {showSearchModal && (
+                <SearchMatchModal
+                    album={album.name}
+                    artist={album.artist}
+                    onClose={() => setShowSearchModal(false)}
+                    onMatchApplied={async () => {
+                        // Refresh metadata after match applied
+                        const res = await axios.get(`${SERVER_URL}/api/album-metadata`, {
+                            params: { album: album.name, artist: album.artist }
+                        });
+                        setAlbumMetadata(res.data);
+                    }}
+                />
+            )}
+
+            {/* Edit Metadata Modal */}
+            {showEditModal && (
+                <EditMetadataModal
+                    album={album.name}
+                    artist={album.artist}
+                    currentDescription={albumMetadata?.release?.description}
+                    currentYear={album.year || undefined}
+                    onClose={() => setShowEditModal(false)}
+                    onSaved={async () => {
+                        // Refresh metadata after save
+                        const res = await axios.get(`${SERVER_URL}/api/album-metadata`, {
+                            params: { album: album.name, artist: album.artist }
+                        });
+                        setAlbumMetadata(res.data);
+                    }}
+                />
+            )}
+
+            {/* Merge Albums Modal */}
+            {showMergeModal && (
+                <MergeAlbumsModal
+                    sourceAlbum={album.name}
+                    sourceArtist={album.artist}
+                    onClose={() => setShowMergeModal(false)}
+                    onMerged={() => {
+                        // Close the album detail modal after merge
+                        onClose();
+                    }}
+                />
+            )}
         </div >
     );
 }

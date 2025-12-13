@@ -43,10 +43,10 @@ db.exec(`
 `);
 
 // Create Indexes for Performance
+// Note: idx_tracks_artist_album covers single-column artist queries too (leftmost column optimization)
 db.exec(`
     CREATE INDEX IF NOT EXISTS idx_tracks_path ON tracks(path);
     CREATE INDEX IF NOT EXISTS idx_tracks_release_mbid ON tracks(release_mbid);
-    CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
     CREATE INDEX IF NOT EXISTS idx_tracks_artist_album ON tracks(artist, album);
     CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks(title);
     CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(album);
@@ -414,6 +414,52 @@ db.exec(`
     FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
   )
 `);
+
+// ========== Database Helper Functions ==========
+
+/**
+ * Execute a function within a transaction with automatic rollback on error
+ */
+export function withTransaction<T>(fn: () => T): T {
+  const transaction = db.transaction(fn);
+  return transaction();
+}
+
+/**
+ * Safely run a database query with error logging
+ */
+export function safeRun(sql: string, params?: any[]): Database.RunResult | null {
+  try {
+    return params ? db.prepare(sql).run(...params) : db.prepare(sql).run();
+  } catch (error) {
+    console.error('[DB Error]', sql.substring(0, 100), error);
+    return null;
+  }
+}
+
+/**
+ * Safely get a single row with error logging
+ */
+export function safeGet<T>(sql: string, params?: any[]): T | null {
+  try {
+    return (params ? db.prepare(sql).get(...params) : db.prepare(sql).get()) as T;
+  } catch (error) {
+    console.error('[DB Error]', sql.substring(0, 100), error);
+    return null;
+  }
+}
+
+/**
+ * Safely get all rows with error logging
+ */
+export function safeAll<T>(sql: string, params?: any[]): T[] {
+  try {
+    return (params ? db.prepare(sql).all(...params) : db.prepare(sql).all()) as T[];
+  } catch (error) {
+    console.error('[DB Error]', sql.substring(0, 100), error);
+    return [];
+  }
+}
 
 // Export typed database instance
 export default db;

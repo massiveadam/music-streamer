@@ -787,14 +787,33 @@ app.post('/api/scan', auth.requireAdmin, (req: AuthRequest, res: Response) => {
     res.json({ message: 'Scan started' });
 });
 
-
 // 10. Start MusicBrainz Enrichment (Admin only)
-app.post('/api/enrich', auth.authenticateToken, auth.requireAdmin, async (_req: AuthRequest, res: Response) => {
-    musicbrainz.startEnrichment();
-    res.json({ message: 'Enrichment started' });
+// Unified endpoint - use mode param: 'tracks' (default), 'albums' (fast), 'artists' (bios)
+app.post('/api/enrich', auth.authenticateToken, auth.requireAdmin, async (req: AuthRequest, res: Response) => {
+    const mode = (req.body?.mode as string) || 'albums'; // Default to album-based (faster)
+    const workers = parseInt(req.body?.workers as string) || 3;
+
+    switch (mode) {
+        case 'tracks':
+            // Legacy track-by-track enrichment
+            musicbrainz.startEnrichment();
+            res.json({ message: 'Track-by-track enrichment started', mode });
+            break;
+        case 'albums':
+            // Fast album-based enrichment (recommended)
+            musicbrainz.startAlbumEnrichment(workers);
+            res.json({ message: `Album-based enrichment started with ${workers} workers`, mode });
+            break;
+        case 'artists':
+            // Artist bio enrichment - handled below
+            res.json({ message: 'Use /api/enrich/artists for artist enrichment', mode });
+            break;
+        default:
+            res.status(400).json({ error: `Invalid mode: ${mode}. Use 'tracks', 'albums', or 'artists'` });
+    }
 });
 
-// 10a. Fast album-based enrichment (Admin only)
+// 10a. Fast album-based enrichment (Admin only) - kept for backwards compatibility
 app.post('/api/enrich/fast', auth.authenticateToken, auth.requireAdmin, async (req: AuthRequest, res: Response) => {
     const workerCount = parseInt(req.body?.workers as string) || 3;
     musicbrainz.startAlbumEnrichment(workerCount);
@@ -1018,28 +1037,48 @@ app.get('/api/artist/:identifier', async (req: Request, res: Response) => {
     }
 });
 
-// 13. Get All Artists (Paginated)
+// 13. Get All Artists (Paginated) - Only artists with MBIDs
 app.get('/api/artists', (req: Request, res: Response) => {
     try {
         const page = parseInt(req.query.page as string) || 1;
-        const limit = parseInt(req.query.limit as string) || 50;
+        const limit = parseInt(req.query.limit as string) || 10000; // Effectively unlimited
         const offset = (page - 1) * limit;
+        const search = req.query.search as string || '';
 
-        const artists = db.prepare(`
-      SELECT a.*, COUNT(DISTINCT t.id) as track_count
-      FROM artists a
-      JOIN tracks t ON t.artist = a.name
-      GROUP BY a.id
-      ORDER BY a.name
-      LIMIT ? OFFSET ?
-    `).all(limit, offset) as (Artist & { track_count: number })[];
+        let artists: (Artist & { track_count: number })[];
+        let total: number;
 
-        const totalResult = db.prepare(`
-      SELECT COUNT(DISTINCT a.id) as total
-      FROM artists a
-      JOIN tracks t ON t.artist = a.name
-    `).get() as { total: number };
-        const total = totalResult.total;
+        if (search) {
+            // Search mode - filter by name
+            artists = db.prepare(`
+                SELECT a.*, 
+                    (SELECT COUNT(*) FROM tracks t WHERE t.artist LIKE '%' || a.name || '%') as track_count
+                FROM artists a
+                WHERE a.mbid IS NOT NULL AND a.name LIKE ?
+                ORDER BY a.name
+                LIMIT ? OFFSET ?
+            `).all(`%${search}%`, limit, offset) as (Artist & { track_count: number })[];
+
+            const totalResult = db.prepare(`
+                SELECT COUNT(*) as total FROM artists WHERE mbid IS NOT NULL AND name LIKE ?
+            `).get(`%${search}%`) as { total: number };
+            total = totalResult.total;
+        } else {
+            // Normal mode - all artists with MBIDs, sorted alphabetically
+            artists = db.prepare(`
+                SELECT a.*, 
+                    (SELECT COUNT(*) FROM tracks t WHERE t.artist LIKE '%' || a.name || '%') as track_count
+                FROM artists a
+                WHERE a.mbid IS NOT NULL
+                ORDER BY a.name COLLATE NOCASE
+                LIMIT ? OFFSET ?
+            `).all(limit, offset) as (Artist & { track_count: number })[];
+
+            const totalResult = db.prepare(`
+                SELECT COUNT(*) as total FROM artists WHERE mbid IS NOT NULL
+            `).get() as { total: number };
+            total = totalResult.total;
+        }
 
         res.json({
             artists,
@@ -1182,6 +1221,244 @@ app.get('/api/album-metadata', (req: Request, res: Response) => {
         });
     } catch (e) {
         console.error("Error fetching album metadata:", e);
+        res.status(500).json({ error: (e as Error).message });
+    }
+});
+
+// 16a. Search MusicBrainz for album matches
+app.get('/api/musicbrainz/search', async (req: Request, res: Response) => {
+    const { album, artist } = req.query;
+    if (!album || !artist) {
+        return res.status(400).json({ error: 'album and artist required' });
+    }
+
+    try {
+        // Search MusicBrainz for releases matching album/artist
+        const results = await musicbrainz.searchReleases(String(album), String(artist));
+        res.json({ results });
+    } catch (e) {
+        console.error('MusicBrainz search error:', e);
+        res.status(500).json({ error: (e as Error).message });
+    }
+});
+
+// 16b. Apply MusicBrainz match to album
+app.post('/api/album/match', auth.authenticateToken, async (req: AuthRequest, res: Response) => {
+    const { album, artist, releaseMbid } = req.body;
+    if (!album || !artist || !releaseMbid) {
+        return res.status(400).json({ error: 'album, artist, and releaseMbid required' });
+    }
+
+    try {
+        // Fetch full release details from MusicBrainz
+        const release = await musicbrainz.getReleaseDetails(releaseMbid);
+        if (!release) {
+            return res.status(404).json({ error: 'Release not found in MusicBrainz' });
+        }
+
+        // Update all tracks with this album/artist to use this release
+        const tracks = db.prepare('SELECT id FROM tracks WHERE album = ? AND artist = ?').all(album, artist) as { id: number }[];
+
+        for (const track of tracks) {
+            db.prepare('UPDATE tracks SET release_mbid = ?, enriched = 1 WHERE id = ?').run(releaseMbid, track.id);
+        }
+
+        // Store/update the release in our database
+        await musicbrainz.enrichTrackWithRelease(tracks[0]?.id, release);
+
+        res.json({ success: true, tracksUpdated: tracks.length });
+    } catch (e) {
+        console.error('Apply match error:', e);
+        res.status(500).json({ error: (e as Error).message });
+    }
+});
+
+// 16c. Update album metadata manually
+app.put('/api/album/metadata', auth.authenticateToken, async (req: AuthRequest, res: Response) => {
+    const { album, artist, description, label, year, tags } = req.body;
+    if (!album || !artist) {
+        return res.status(400).json({ error: 'album and artist required' });
+    }
+
+    try {
+        // Find the release for this album
+        const track = db.prepare('SELECT release_mbid FROM tracks WHERE album = ? AND artist = ? LIMIT 1')
+            .get(album, artist) as { release_mbid: string } | undefined;
+
+        if (track?.release_mbid) {
+            const release = db.prepare('SELECT id FROM releases WHERE mbid = ?').get(track.release_mbid) as { id: number } | undefined;
+
+            if (release) {
+                // Update release metadata
+                if (description !== undefined) {
+                    db.prepare('UPDATE releases SET description = ? WHERE id = ?').run(description, release.id);
+                }
+                if (year !== undefined) {
+                    db.prepare('UPDATE releases SET year = ? WHERE id = ?').run(year, release.id);
+                }
+            }
+        }
+
+        // Update year on tracks if provided
+        if (year !== undefined) {
+            db.prepare('UPDATE tracks SET year = ? WHERE album = ? AND artist = ?').run(year, album, artist);
+        }
+
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Update metadata error:', e);
+        res.status(500).json({ error: (e as Error).message });
+    }
+});
+
+// 16d. Re-enrich album (force re-fetch from MusicBrainz)
+app.post('/api/album/re-enrich', auth.authenticateToken, async (req: AuthRequest, res: Response) => {
+    const { album, artist } = req.body;
+    if (!album || !artist) {
+        return res.status(400).json({ error: 'album and artist required' });
+    }
+
+    try {
+        // Mark all tracks in this album as unenriched
+        const result = db.prepare('UPDATE tracks SET enriched = 0, release_mbid = NULL WHERE album = ? AND artist = ?')
+            .run(album, artist);
+
+        // Trigger enrichment for these tracks
+        const tracks = db.prepare('SELECT * FROM tracks WHERE album = ? AND artist = ?').all(album, artist) as Track[];
+
+        if (tracks.length > 0) {
+            // Enrich the first track (which will enrich the whole album)
+            const enrichResult = await musicbrainz.enrichTrack(tracks[0]);
+
+            // Mark other tracks as enriched if first one succeeded
+            if (enrichResult.success) {
+                for (const track of tracks.slice(1)) {
+                    db.prepare('UPDATE tracks SET enriched = 1, release_mbid = ? WHERE id = ?')
+                        .run(tracks[0].release_mbid, track.id);
+                }
+            }
+
+            res.json({
+                success: enrichResult.success,
+                tracksUpdated: result.changes,
+                details: enrichResult
+            });
+        } else {
+            res.json({ success: false, error: 'No tracks found for this album' });
+        }
+    } catch (e) {
+        console.error('Re-enrich error:', e);
+        res.status(500).json({ error: (e as Error).message });
+    }
+});
+
+// 16e. Merge two albums into one
+app.post('/api/album/merge', auth.authenticateToken, async (req: AuthRequest, res: Response) => {
+    const { sourceAlbum, sourceArtist, targetAlbum, targetArtist } = req.body;
+    if (!sourceAlbum || !sourceArtist || !targetAlbum || !targetArtist) {
+        return res.status(400).json({ error: 'sourceAlbum, sourceArtist, targetAlbum, targetArtist required' });
+    }
+
+    try {
+        // Get target album's release_mbid if it has one
+        const targetTrack = db.prepare('SELECT release_mbid FROM tracks WHERE album = ? AND artist = ? LIMIT 1')
+            .get(targetAlbum, targetArtist) as { release_mbid: string } | undefined;
+
+        // Update all source tracks to match target album
+        const result = db.prepare(`
+            UPDATE tracks SET 
+                album = ?, 
+                artist = ?,
+                release_mbid = COALESCE(?, release_mbid)
+            WHERE album = ? AND artist = ?
+        `).run(targetAlbum, targetArtist, targetTrack?.release_mbid || null, sourceAlbum, sourceArtist);
+
+        res.json({ success: true, tracksMerged: result.changes });
+    } catch (e) {
+        console.error('Merge albums error:', e);
+        res.status(500).json({ error: (e as Error).message });
+    }
+});
+
+// 16f. Rename album/artist (update track metadata)
+app.put('/api/album/rename', auth.authenticateToken, async (req: AuthRequest, res: Response) => {
+    const { oldAlbum, oldArtist, newAlbum, newArtist } = req.body;
+    if (!oldAlbum || !oldArtist) {
+        return res.status(400).json({ error: 'oldAlbum and oldArtist required' });
+    }
+
+    try {
+        // Build update query dynamically based on what's being changed
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (newAlbum && newAlbum !== oldAlbum) {
+            updates.push('album = ?');
+            params.push(newAlbum);
+        }
+        if (newArtist && newArtist !== oldArtist) {
+            updates.push('artist = ?');
+            params.push(newArtist);
+        }
+
+        if (updates.length === 0) {
+            return res.json({ success: true, tracksUpdated: 0, message: 'Nothing to update' });
+        }
+
+        params.push(oldAlbum, oldArtist);
+        const result = db.prepare(`UPDATE tracks SET ${updates.join(', ')} WHERE album = ? AND artist = ?`).run(...params);
+
+        res.json({ success: true, tracksUpdated: result.changes });
+    } catch (e) {
+        console.error('Rename album error:', e);
+        res.status(500).json({ error: (e as Error).message });
+    }
+});
+
+// 16g. Update album cover art (from URL or MusicBrainz)
+app.post('/api/album/cover-art', auth.authenticateToken, async (req: AuthRequest, res: Response) => {
+    const { album, artist, imageUrl, releaseMbid } = req.body;
+    if (!album || !artist) {
+        return res.status(400).json({ error: 'album and artist required' });
+    }
+
+    try {
+        // Get tracks for this album
+        const tracks = db.prepare('SELECT id, release_mbid FROM tracks WHERE album = ? AND artist = ?')
+            .all(album, artist) as { id: number; release_mbid: string }[];
+
+        if (tracks.length === 0) {
+            return res.status(404).json({ error: 'Album not found' });
+        }
+
+        const axios = (await import('axios')).default;
+        let imageBuffer: Buffer | null = null;
+
+        if (imageUrl) {
+            // Fetch from provided URL
+            const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+            imageBuffer = Buffer.from(response.data);
+        } else if (releaseMbid) {
+            // Fetch from CoverArtArchive
+            const coverUrl = `https://coverartarchive.org/release/${releaseMbid}/front-500`;
+            const response = await axios.get(coverUrl, { responseType: 'arraybuffer' });
+            imageBuffer = Buffer.from(response.data);
+        }
+
+        if (!imageBuffer) {
+            return res.status(400).json({ error: 'imageUrl or releaseMbid required' });
+        }
+
+        // Save cover art for each track (simple file write, no resize)
+        for (const track of tracks) {
+            const artPath = path.join(ART_DIR, `${track.id}.jpg`);
+            fs.writeFileSync(artPath, imageBuffer);
+            db.prepare('UPDATE tracks SET has_art = 1 WHERE id = ?').run(track.id);
+        }
+
+        res.json({ success: true, tracksUpdated: tracks.length });
+    } catch (e) {
+        console.error('Cover art update error:', e);
         res.status(500).json({ error: (e as Error).message });
     }
 });

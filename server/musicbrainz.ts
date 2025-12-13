@@ -397,11 +397,19 @@ async function fetchWikipediaDescription(albumTitle: string, artistName: string)
 
     const cleanedAlbum = cleanSearchTerm(albumTitle);
 
-    // Try different Wikipedia title patterns
+    // Extract primary artist name (remove "Trio", "Quartet", "Band", etc.)
+    const primaryArtist = artistName
+        .replace(/\s+(Trio|Quartet|Quintet|Sextet|Band|Orchestra|Ensemble|Group)$/i, '')
+        .trim();
+
+    // Try different Wikipedia title patterns (order matters - most specific first)
     const titlePatterns = [
-        `${cleanedAlbum}_(album)`,
-        `${cleanedAlbum}_(${artistName}_album)`,
-        cleanedAlbum,
+        `${cleanedAlbum}_(${primaryArtist}_album)`,    // Ahmad_Jamal album
+        `${cleanedAlbum}_(${artistName}_album)`,       // Full artist name album  
+        `${cleanedAlbum}_(album)`,                     // Generic album suffix
+        `${cleanedAlbum}_(music_album)`,               // Music album disambiguation
+        `${cleanedAlbum}_(${primaryArtist})`,          // Just artist name in parens
+        cleanedAlbum,                                  // Just the album name (last resort)
     ];
 
     for (const pattern of titlePatterns) {
@@ -577,8 +585,16 @@ function upsertLabel(labelData: MBLabel): number | null {
 function upsertRelease(releaseData: MBRelease): number | null {
     if (!releaseData || !releaseData.id) return null;
 
+    // Check if release exists
     const existing = db.prepare('SELECT id FROM releases WHERE mbid = ?').get(releaseData.id) as { id: number } | undefined;
-    if (existing) return existing.id;
+
+    // Always update description if we have new data (for re-enrichment)
+    if (existing && releaseData.description) {
+        db.prepare('UPDATE releases SET description = ? WHERE id = ?').run(releaseData.description, existing.id);
+        return existing.id;
+    } else if (existing) {
+        return existing.id;
+    }
 
     let labelMbid: string | null = null;
     if (releaseData['label-info'] && releaseData['label-info'].length > 0) {
@@ -612,58 +628,131 @@ function upsertRelease(releaseData: MBRelease): number | null {
 }
 
 /**
- * Fetch and store extra cover art from CoverArtArchive
+ * Fetch and store cover art with multi-source fallbacks:
+ * 1. CoverArtArchive - release-specific
+ * 2. CoverArtArchive - release-group (fallback)
+ * 3. Also sets has_art on tracks for this release
  */
-async function fetchAndStoreCoverArt(mbid: string): Promise<void> {
+async function fetchAndStoreCoverArt(mbid: string, releaseGroupId?: string): Promise<void> {
     if (!mbid) return;
 
     const existing = db.prepare('SELECT COUNT(*) as count FROM album_images WHERE release_mbid = ?').get(mbid) as { count: number };
     if (existing && existing.count > 0) return;
 
+    const artDir = path.join(__dirname, 'storage', 'art');
+    if (!fs.existsSync(artDir)) fs.mkdirSync(artDir, { recursive: true });
+
+    let foundArt = false;
+
+    // Strategy 1: Try release-specific art from CoverArtArchive
     try {
         const url = `http://coverartarchive.org/release/${mbid}`;
-        const res = await axios.get(url, { validateStatus: () => true });
+        const res = await axios.get(url, { validateStatus: () => true, timeout: 10000 });
 
-        if (res.status === 200 && res.data.images) {
-            const artDir = path.join(__dirname, 'storage', 'art');
-            if (!fs.existsSync(artDir)) fs.mkdirSync(artDir, { recursive: true });
-
-            for (const img of res.data.images) {
-                const isBack = img.types.includes('Back');
-                const isFront = img.types.includes('Front');
-
-                if (isBack || isFront) {
-                    const type = isBack ? 'back' : 'front';
-                    const ext = path.extname(img.image) || '.jpg';
-                    const filename = `${mbid}_${type}${ext}`;
-                    const localPath = path.join(artDir, filename);
-
-                    const writer = fs.createWriteStream(localPath);
-                    const response = await axios({
-                        url: img.image,
-                        method: 'GET',
-                        responseType: 'stream'
-                    });
-
-                    response.data.pipe(writer);
-
-                    await new Promise<void>((resolve, reject) => {
-                        writer.on('finish', resolve);
-                        writer.on('error', reject);
-                    });
-
-                    try {
-                        db.prepare(`
-              INSERT INTO album_images (release_mbid, type, path, source)
-              VALUES (?, ?, ?, 'coverartarchive')
-            `).run(mbid, type, localPath);
-                    } catch (e) { }
-                }
-            }
+        if (res.status === 200 && res.data.images && res.data.images.length > 0) {
+            foundArt = await downloadCoverArt(res.data.images, mbid, artDir);
         }
     } catch (err) {
-        // Ignore errors
+        console.log(`[CoverArt] Release-specific art not found for ${mbid}`);
     }
+
+    // Strategy 2: Try release-group art as fallback
+    if (!foundArt && releaseGroupId) {
+        try {
+            const rgUrl = `http://coverartarchive.org/release-group/${releaseGroupId}`;
+            const res = await axios.get(rgUrl, { validateStatus: () => true, timeout: 10000 });
+
+            if (res.status === 200 && res.data.images && res.data.images.length > 0) {
+                console.log(`[CoverArt] Found release-group art for ${releaseGroupId}`);
+                foundArt = await downloadCoverArt(res.data.images, mbid, artDir);
+            }
+        } catch (err) {
+            console.log(`[CoverArt] Release-group art not found for ${releaseGroupId}`);
+        }
+    }
+
+    // Strategy 3: Get release-group from MusicBrainz if not provided
+    if (!foundArt && !releaseGroupId) {
+        try {
+            const releaseInfo = await mbApi.lookup('release', mbid, ['release-groups']);
+            const rgid = (releaseInfo as any)['release-group']?.id;
+            if (rgid) {
+                const rgUrl = `http://coverartarchive.org/release-group/${rgid}`;
+                const res = await axios.get(rgUrl, { validateStatus: () => true, timeout: 10000 });
+
+                if (res.status === 200 && res.data.images && res.data.images.length > 0) {
+                    console.log(`[CoverArt] Found release-group art (fetched) for ${rgid}`);
+                    foundArt = await downloadCoverArt(res.data.images, mbid, artDir);
+                }
+            }
+        } catch (err) {
+            // Final fallback failed
+        }
+    }
+
+    // Update has_art on all tracks with this release_mbid if we found art
+    if (foundArt) {
+        db.prepare('UPDATE tracks SET has_art = 1 WHERE release_mbid = ?').run(mbid);
+        console.log(`[CoverArt] Set has_art=1 for tracks with release ${mbid}`);
+    }
+}
+
+/**
+ * Helper function to download cover art images
+ */
+async function downloadCoverArt(images: any[], mbid: string, artDir: string): Promise<boolean> {
+    let downloaded = false;
+
+    for (const img of images) {
+        const isBack = img.types?.includes('Back');
+        const isFront = img.types?.includes('Front');
+
+        if (isBack || isFront) {
+            const type = isBack ? 'back' : 'front';
+            const ext = path.extname(img.image) || '.jpg';
+            const filename = `${mbid}_${type}${ext}`;
+            const localPath = path.join(artDir, filename);
+
+            try {
+                const writer = fs.createWriteStream(localPath);
+                const response = await axios({
+                    url: img.image,
+                    method: 'GET',
+                    responseType: 'stream',
+                    timeout: 30000
+                });
+
+                response.data.pipe(writer);
+
+                await new Promise<void>((resolve, reject) => {
+                    writer.on('finish', resolve);
+                    writer.on('error', reject);
+                });
+
+                try {
+                    db.prepare(`
+                        INSERT INTO album_images (release_mbid, type, path, source)
+                        VALUES (?, ?, ?, 'coverartarchive')
+                    `).run(mbid, type, localPath);
+                } catch (e) { }
+
+                // Also save as track art for first track with this release
+                if (isFront) {
+                    const firstTrack = db.prepare('SELECT id FROM tracks WHERE release_mbid = ? LIMIT 1').get(mbid) as { id: number } | undefined;
+                    if (firstTrack) {
+                        const trackArtPath = path.join(artDir, `${firstTrack.id}.jpg`);
+                        fs.copyFileSync(localPath, trackArtPath);
+                    }
+                }
+
+                downloaded = true;
+            } catch (e) {
+                console.error(`[CoverArt] Failed to download ${type} art:`, (e as Error).message);
+            }
+        }
+    }
+
+    return downloaded;
 }
 
 /**
@@ -1160,6 +1249,69 @@ export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ e
     };
 }
 
+/**
+ * Search MusicBrainz for releases matching album/artist (for manual matching UI)
+ */
+export async function searchReleases(albumTitle: string, artistName: string): Promise<any[]> {
+    try {
+        const cleanAlbum = cleanSearchTerm(albumTitle);
+        const query = `release:"${cleanAlbum}" AND artist:"${artistName}"`;
+
+        const result = await rateLimitedRequest(() =>
+            mbApi.search('release', { query, limit: 10 })
+        );
+
+        if (!result.releases) return [];
+
+        // Return simplified release data for UI
+        return result.releases.map((rel: any) => ({
+            id: rel.id,
+            title: rel.title,
+            artist: rel['artist-credit']?.[0]?.artist?.name || artistName,
+            date: rel.date,
+            country: rel.country,
+            label: rel['label-info']?.[0]?.label?.name,
+            trackCount: rel['track-count'],
+            status: rel.status,
+            barcode: rel.barcode
+        }));
+    } catch (e) {
+        console.error('MusicBrainz release search error:', e);
+        return [];
+    }
+}
+
+/**
+ * Enrich a track using a specific release (for manual matching)
+ */
+export async function enrichTrackWithRelease(trackId: number, release: MBRelease): Promise<boolean> {
+    if (!trackId || !release) return false;
+
+    try {
+        // Upsert the release
+        const releaseId = upsertRelease(release);
+
+        // Update track with release_mbid
+        db.prepare('UPDATE tracks SET release_mbid = ?, enriched = 1 WHERE id = ?')
+            .run(release.id, trackId);
+
+        // Store tags if available
+        if (release.tags) {
+            storeEntityTags('release', releaseId, release.tags);
+        }
+
+        // Fetch and store cover art
+        fetchAndStoreCoverArt(release.id).catch(e =>
+            console.error(`Cover art fetch error: ${(e as Error).message}`)
+        );
+
+        return true;
+    } catch (e) {
+        console.error('Enrich track with release error:', e);
+        return false;
+    }
+}
+
 export default {
     searchRecording,
     getRecordingDetails,
@@ -1169,5 +1321,7 @@ export default {
     startEnrichment,
     startAlbumEnrichment,
     getEnrichmentStatus,
-    upsertArtist
+    upsertArtist,
+    searchReleases,
+    enrichTrackWithRelease
 };

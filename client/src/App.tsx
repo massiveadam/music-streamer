@@ -291,35 +291,41 @@ function MusicPlayer() {
     }
   }, [audioRefA, audioRefB]);
 
+  // Skip lock to prevent rapid successive skips
+  const [isTransitioning, setIsTransitioning] = useState(false);
+
   // Handle Playback & Crossfading
   const playTrack = async (index, transition = 'cut') => {
-    if (!Array.isArray(tracks) || index < 0 || index >= tracks.length) return;
+    if (isTransitioning || !Array.isArray(tracks) || index < 0 || index >= tracks.length) return;
 
+    setIsTransitioning(true);
     const nextTrack = tracks[index];
     const nextDeck = activeDeck === 'A' ? 'B' : 'A';
 
-    // Prepare Next Deck
-    if (nextDeck === 'A') setDeckATrack(nextTrack);
-    else setDeckBTrack(nextTrack);
+    try {
+      // Prepare Next Deck
+      if (nextDeck === 'A') setDeckATrack(nextTrack);
+      else setDeckBTrack(nextTrack);
 
-    // Wait for React to render the new src (microtask/render cycle)
-    // In a real app we'd wait for 'canplay' event.
-    setTimeout(async () => {
+      // Wait for audio element to be ready
+      await new Promise(resolve => setTimeout(resolve, 50));
+
       const nextAudio = nextDeck === 'A' ? audioRefA.current : audioRefB.current;
+      if (!nextAudio) throw new Error('Audio element not ready');
 
       if (transition === 'crossfade') {
         await nextAudio.play();
         audioEngine.crossfadeTo(nextDeck);
       } else {
-        // Hard Cut
-        // Stop current
+        // Hard Cut - abort any ongoing crossfade
+        audioEngine.decks[activeDeck].gain.gain.setValueAtTime(0, audioEngine.audioCtx!.currentTime);
+        audioEngine.decks[nextDeck].gain.gain.setValueAtTime(1, audioEngine.audioCtx!.currentTime);
+        
         const currentAudio = activeDeck === 'A' ? audioRefA.current : audioRefB.current;
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
-        // Play next
-        // Quick fade helper could go here, but for now strict cut
-        audioEngine.decks[activeDeck].gain.gain.value = 0;
-        audioEngine.decks[nextDeck].gain.gain.value = 1;
+        if (currentAudio) {
+          currentAudio.pause();
+          currentAudio.currentTime = 0;
+        }
         await nextAudio.play();
         audioEngine.activeDeck = nextDeck;
       }
@@ -333,7 +339,11 @@ function MusicPlayer() {
 
       // Log to listening history
       axios.post(`${SERVER_URL}/api/history/log`, { trackId: nextTrack.id }).catch(() => { });
-    }, 100);
+    } catch (error) {
+      console.error('Playback error:', error);
+    } finally {
+      setIsTransitioning(false);
+    }
   };
 
   const togglePlay = () => {
@@ -449,8 +459,11 @@ function MusicPlayer() {
     let nextIndex;
 
     if (shuffleMode) {
-      // Pick random track
-      nextIndex = Math.floor(Math.random() * tracks.length);
+      // Pick random track (exclude current track)
+      const availableTracks = tracks.filter((_, i) => i !== currentTrackIndex);
+      if (availableTracks.length === 0) return; // No other tracks available
+      const randomTrack = availableTracks[Math.floor(Math.random() * availableTracks.length)];
+      nextIndex = tracks.findIndex(t => t.id === randomTrack.id);
     } else {
       nextIndex = currentTrackIndex + 1;
     }

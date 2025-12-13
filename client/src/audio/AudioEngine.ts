@@ -242,6 +242,23 @@ class AudioEngine {
         this.activeDeck = targetDeckId;
     }
 
+    // Abort any ongoing crossfade for instant cuts
+    abortCrossfade(): void {
+        if (!this.audioCtx) return;
+        const now = this.audioCtx.currentTime;
+        
+        // Cancel all scheduled gain changes
+        Object.values(this.decks).forEach(deck => {
+            if (deck.gain) {
+                deck.gain.gain.cancelScheduledValues(now);
+            }
+        });
+
+        // Set immediate levels based on active deck
+        this.decks.A.gain!.gain.setValueAtTime(this.activeDeck === 'A' ? 1 : 0, now);
+        this.decks.B.gain!.gain.setValueAtTime(this.activeDeck === 'B' ? 1 : 0, now);
+    }
+
     // ========== PARAMETRIC EQ CONTROLS ==========
 
     // Calculate biquad coefficients using Audio EQ Cookbook formulas
@@ -304,123 +321,74 @@ class AudioEngine {
         const now = this.audioCtx.currentTime;
         const sampleRate = this.audioCtx.sampleRate;
 
+        // Batch all filter updates to prevent audio glitches
+        const updates: Array<() => void> = [];
+
         this.filters.forEach((filter, i) => {
             const band = this.bands[i];
 
             if (band && band.enabled) {
-                // For shelf filters with Q, we need to use IIRFilterNode with custom coefficients
-                if ((band.type === 'lowshelf' || band.type === 'highshelf') && band.Q !== 0.7071) {
-                    // Need to replace with IIRFilterNode for custom coefficients
+                // For shelf filters with custom Q, use IIRFilterNode
+                if ((band.type === 'lowshelf' || band.type === 'highshelf') && Math.abs(band.Q - 0.7071) > 0.01) {
                     const coef = this.calculateShelfCoefficients(band.type, band.frequency, band.gain, band.Q, sampleRate);
-
-                    // Normalize coefficients
                     const feedforward = [coef.b0 / coef.a0, coef.b1 / coef.a0, coef.b2 / coef.a0];
                     const feedback = [1, coef.a1 / coef.a0, coef.a2 / coef.a0];
 
-                    // Check if we need to replace the node
-                    if (!(filter instanceof IIRFilterNode)) {
-                        // Disconnect old filter
-                        filter.disconnect();
-
-                        // Create new IIR filter
-                        const newFilter = this.audioCtx.createIIRFilter(feedforward, feedback);
-
-                        // Reconnect
-                        if (i === 0) {
-                            this.preampGain!.disconnect();
-                            this.preampGain!.connect(newFilter);
-                        } else {
-                            this.filters[i - 1].disconnect();
-                            this.filters[i - 1].connect(newFilter);
+                    updates.push(() => {
+                        // Only recreate if type changed
+                        if (!(filter instanceof IIRFilterNode)) {
+                            filter.disconnect();
+                            const newFilter = this.audioCtx!.createIIRFilter(feedforward, feedback);
+                            this.reconnectFilter(i, newFilter);
+                            this.filters[i] = newFilter;
                         }
-
-                        if (i === this.filters.length - 1) {
-                            newFilter.connect(this.masterGain!);
-                        } else {
-                            newFilter.connect(this.filters[i + 1]);
-                        }
-
-                        this.filters[i] = newFilter;
-                    } else {
-                        // IIR filters can't be updated, need to recreate
-                        filter.disconnect();
-                        const newFilter = this.audioCtx.createIIRFilter(feedforward, feedback);
-
-                        if (i === 0) {
-                            this.preampGain!.disconnect();
-                            this.preampGain!.connect(newFilter);
-                        } else {
-                            this.filters[i - 1].disconnect();
-                            this.filters[i - 1].connect(newFilter);
-                        }
-
-                        if (i === this.filters.length - 1) {
-                            newFilter.connect(this.masterGain!);
-                        } else {
-                            newFilter.connect(this.filters[i + 1]);
-                        }
-
-                        this.filters[i] = newFilter;
-                    }
+                    });
                 } else {
-                    // Use BiquadFilterNode for peaking or shelf with default Q
-                    if (!(filter instanceof BiquadFilterNode)) {
-                        // Replace IIR with Biquad
-                        filter.disconnect();
-                        const newFilter = this.audioCtx.createBiquadFilter();
-
-                        if (i === 0) {
-                            this.preampGain!.disconnect();
-                            this.preampGain!.connect(newFilter);
-                        } else {
-                            this.filters[i - 1].disconnect();
-                            this.filters[i - 1].connect(newFilter);
+                    // Use BiquadFilterNode for simplicity and stability
+                    updates.push(() => {
+                        if (!(filter instanceof BiquadFilterNode)) {
+                            filter.disconnect();
+                            const newFilter = this.audioCtx!.createBiquadFilter();
+                            this.reconnectFilter(i, newFilter);
+                            this.filters[i] = newFilter;
                         }
 
-                        if (i === this.filters.length - 1) {
-                            newFilter.connect(this.masterGain!);
-                        } else {
-                            newFilter.connect(this.filters[i + 1]);
-                        }
-
-                        this.filters[i] = newFilter;
-                    }
-
-                    const biquad = filter as BiquadFilterNode;
-                    biquad.type = band.type;
-                    biquad.frequency.setTargetAtTime(band.frequency, now, 0.05);
-                    biquad.Q.setTargetAtTime(band.Q, now, 0.05);
-                    biquad.gain.setTargetAtTime(band.gain, now, 0.05);
+                        const biquad = filter as BiquadFilterNode;
+                        biquad.type = band.type;
+                        // Use shorter ramp time for better responsiveness
+                        biquad.frequency.setTargetAtTime(band.frequency, now, 0.01);
+                        biquad.Q.setTargetAtTime(band.Q, now, 0.01);
+                        biquad.gain.setTargetAtTime(band.gain, now, 0.01);
+                    });
                 }
             } else {
-                // Unused slot or disabled band -> set to flat
-                if (filter instanceof BiquadFilterNode) {
-                    filter.gain.setTargetAtTime(0, now, 0.05);
-                } else {
-                    // For IIR, replace with flat biquad
-                    filter.disconnect();
-                    const newFilter = this.audioCtx.createBiquadFilter();
-                    newFilter.type = 'peaking';
-                    newFilter.gain.value = 0;
-
-                    if (i === 0) {
-                        this.preampGain!.disconnect();
-                        this.preampGain!.connect(newFilter);
-                    } else {
-                        this.filters[i - 1].disconnect();
-                        this.filters[i - 1].connect(newFilter);
+                // Disabled band -> set to flat with minimal processing
+                updates.push(() => {
+                    if (filter instanceof BiquadFilterNode) {
+                        filter.gain.setTargetAtTime(0, now, 0.01);
                     }
-
-                    if (i === this.filters.length - 1) {
-                        newFilter.connect(this.masterGain!);
-                    } else {
-                        newFilter.connect(this.filters[i + 1]);
-                    }
-
-                    this.filters[i] = newFilter;
-                }
+                });
             }
         });
+
+        // Execute all updates in a single batch
+        updates.forEach(update => update());
+    }
+
+    private reconnectFilter(index: number, newFilter: BiquadFilterNode | IIRFilterNode): void {
+        if (index === 0) {
+            this.preampGain!.disconnect();
+            this.preampGain!.connect(newFilter);
+        } else {
+            this.filters[index - 1].disconnect();
+            this.filters[index - 1].connect(newFilter);
+        }
+
+        if (index === this.filters.length - 1) {
+            newFilter.connect(this.masterGain!);
+        } else {
+            newFilter.connect(this.filters[index + 1]);
+        }
     }
 
     importFromText(text: string): void {
@@ -650,10 +618,17 @@ class AudioEngine {
 
                 const filterMag = new Float32Array(frequencies.length);
                 const filterPhase = new Float32Array(frequencies.length);
-                filter.getFrequencyResponse(frequencies, filterMag, filterPhase);
-
-                for (let j = 0; j < frequencies.length; j++) {
-                    magResponse[j] *= filterMag[j];
+                
+                try {
+                    // Use a type-safe wrapper for getFrequencyResponse
+                    this.safeGetFrequencyResponse(filter, frequencies, filterMag, filterPhase);
+                    
+                    for (let j = 0; j < frequencies.length; j++) {
+                        magResponse[j] *= filterMag[j];
+                    }
+                } catch (e) {
+                    // Skip filters that fail frequency response calculation
+                    console.warn('Filter frequency response calculation failed:', e);
                 }
             });
         }
@@ -665,6 +640,27 @@ class AudioEngine {
         }
 
         return magResponse;
+    }
+
+    // Type-safe wrapper for getFrequencyResponse
+    private safeGetFrequencyResponse(
+        filter: BiquadFilterNode | IIRFilterNode,
+        frequencies: Float32Array,
+        magResponse: Float32Array,
+        phaseResponse: Float32Array
+    ): void {
+        // Create properly typed arrays
+        const freqArray = new Float32Array(frequencies);
+        const magArray = new Float32Array(magResponse.length);
+        const phaseArray = new Float32Array(phaseResponse.length);
+        
+        filter.getFrequencyResponse(freqArray, magArray, phaseArray);
+        
+        // Copy results back
+        for (let i = 0; i < magResponse.length; i++) {
+            magResponse[i] = magArray[i];
+            phaseResponse[i] = phaseArray[i];
+        }
     }
 }
 
