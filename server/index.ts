@@ -7,10 +7,12 @@ import { parseFile, IAudioMetadata } from 'music-metadata';
 import db, { getSetting, setSetting } from './db';
 import type { Track, Artist, Credit } from '../types';
 import * as musicbrainz from './musicbrainz';
+import * as sonicProfiles from './sonicProfiles';
 import * as lastfm from './lastfm';
 import * as wikipedia from './wikipedia';
 import * as auth from './auth';
 import type { AuthRequest } from './auth';
+import * as audioAnalyzer from './audioAnalyzer';
 
 const app = express();
 const PORT = 3001;
@@ -45,6 +47,8 @@ interface TrackData {
     genre: string | null;
     hasArt: number;
     mood: string | null;
+    mbid: string | null;
+    release_mbid: string | null;
 }
 
 // Global Scan State
@@ -79,11 +83,28 @@ async function processFile(fullPath: string): Promise<boolean> {
                 hasArt = 1;
             }
 
+            const trackData: TrackData = {
+                path: fullPath,
+                title: metadata.common.title || path.basename(fullPath, ext),
+                artist: metadata.common.artist || 'Unknown Artist',
+                album: metadata.common.album || 'Unknown Album',
+                duration: metadata.format.duration,
+                format: ext.substring(1),
+                bpm: metadata.common.bpm || null,
+                key: metadata.common.key || null,
+                year: metadata.common.year || null,
+                genre: metadata.common.genre ? metadata.common.genre[0] : null,
+                hasArt,
+                mood: null,
+                mbid: metadata.common.musicbrainz_trackid || null,
+                release_mbid: metadata.common.musicbrainz_albumid || null
+            };
+
             // Transaction for all DB writes
             const writeTrackData = db.transaction((data: { track: TrackData; metadata: IAudioMetadata }) => {
                 const insert = db.prepare(`
-          INSERT OR IGNORE INTO tracks (path, title, artist, album, duration, format, bpm, key, year, genre, has_art, mood)
-          VALUES (@path, @title, @artist, @album, @duration, @format, @bpm, @key, @year, @genre, @hasArt, @mood)
+          INSERT OR IGNORE INTO tracks (path, title, artist, album, duration, format, bpm, key, year, genre, has_art, mood, mbid, release_mbid)
+          VALUES (@path, @title, @artist, @album, @duration, @format, @bpm, @key, @year, @genre, @hasArt, @mood, @mbid, @release_mbid)
         `);
 
                 const result = insert.run(data.track);
@@ -116,21 +137,7 @@ async function processFile(fullPath: string): Promise<boolean> {
                 } catch (e) { /* ignore */ }
             }
 
-            // Prepare Data Object
-            const trackData: TrackData = {
-                path: fullPath,
-                title: metadata.common.title || path.basename(fullPath),
-                artist: metadata.common.artist || 'Unknown Artist',
-                album: metadata.common.album || 'Unknown Album',
-                duration: metadata.format.duration,
-                format: metadata.format.container,
-                bpm: metadata.common.bpm || null,
-                key: null, // music-metadata doesn't have key
-                year: metadata.common.year || null,
-                genre: (metadata.common.genre && metadata.common.genre[0]) || null,
-                hasArt: hasArt,
-                mood: null // music-metadata doesn't have mood
-            };
+
 
             const trackId = writeTrackData({ track: trackData, metadata });
 
@@ -183,6 +190,21 @@ async function startBackgroundScan(scanPath: string, limit: number = 0): Promise
     try {
         await scanRecursively(scanPath, limit);
         console.log("Scan complete.");
+
+        // Auto-trigger metadata processing for new tracks after scan
+        // 1. Run MusicBrainz/Last.fm enrichment first (for genre, tags, credits)
+        console.log("Starting automatic metadata enrichment (MusicBrainz + Last.fm)...");
+        try {
+            await musicbrainz.startAlbumEnrichment(3); // Fast album-based enrichment with 3 workers
+        } catch (err) {
+            console.error('Auto enrichment error:', err);
+        }
+
+        // 2. Then run audio analysis (for BPM, key, mood, energy)
+        console.log("Starting automatic audio analysis...");
+        audioAnalyzer.analyzeLibrary(true).catch(err => {
+            console.error('Auto audio analysis error:', err);
+        });
     } catch (err) {
         console.error("Scan error:", err);
     } finally {
@@ -354,15 +376,21 @@ app.get('/api/config/public', (req: Request, res: Response) => {
 app.get('/api/settings/system', auth.authenticateToken, auth.requireAdmin, (req: Request, res: Response) => {
     res.json({
         lastfm_api_key: getSetting('lastfm_api_key') || '',
-        lastfm_api_secret: getSetting('lastfm_api_secret') || ''
+        lastfm_api_secret: getSetting('lastfm_api_secret') || '',
+        discogs_consumer_key: getSetting('discogs_consumer_key') || '',
+        discogs_consumer_secret: getSetting('discogs_consumer_secret') || ''
     });
 });
 
 // Admin: Update System Settings
 app.put('/api/settings/system', auth.authenticateToken, auth.requireAdmin, (req: Request, res: Response) => {
-    const { lastfm_api_key, lastfm_api_secret } = req.body;
+    const { lastfm_api_key, lastfm_api_secret, discogs_consumer_key, discogs_consumer_secret } = req.body;
+
     if (lastfm_api_key !== undefined) setSetting('lastfm_api_key', lastfm_api_key);
     if (lastfm_api_secret !== undefined) setSetting('lastfm_api_secret', lastfm_api_secret);
+    if (discogs_consumer_key !== undefined) setSetting('discogs_consumer_key', discogs_consumer_key);
+    if (discogs_consumer_secret !== undefined) setSetting('discogs_consumer_secret', discogs_consumer_secret);
+
     res.json({ success: true });
 });
 
@@ -400,17 +428,36 @@ app.get('/api/tracks', (req: Request, res: Response) => {
     }
 });
 
-// 5. Serve Album Artwork with caching
+// 5. Serve Album Artwork with caching (Fallback to Release Art)
 app.get('/api/art/:trackId', (req: Request, res: Response) => {
+    // 1. Try embedded art (extracted)
     const artPath = path.join(ART_DIR, `${req.params.trackId}.jpg`);
     if (fs.existsSync(artPath)) {
-        // Cache for 1 day - album art rarely changes
         res.set('Cache-Control', 'public, max-age=86400, immutable');
         res.set('ETag', `art-${req.params.trackId}`);
         res.sendFile(artPath);
-    } else {
-        res.status(404).send('No artwork');
+        return;
     }
+
+    // 2. Fallback to release-level art (CoverArtArchive/Discogs)
+    const track = db.prepare('SELECT release_mbid FROM tracks WHERE id = ?').get(req.params.trackId) as { release_mbid: string } | undefined;
+
+    if (track && track.release_mbid) {
+        const artDir = path.join(__dirname, 'storage', 'art');
+        if (fs.existsSync(artDir)) {
+            // Look for front/medium cover for this MBID
+            const files = fs.readdirSync(artDir).filter(f => f.startsWith(`${track.release_mbid}_front`) || f.startsWith(`${track.release_mbid}_medium`));
+
+            if (files.length > 0) {
+                res.set('Cache-Control', 'public, max-age=86400, immutable');
+                res.set('ETag', `art-release-${track.release_mbid}`);
+                res.sendFile(path.join(artDir, files[0]));
+                return;
+            }
+        }
+    }
+
+    res.status(404).send('No artwork');
 });
 
 // 5b. Serve Album Images (Back covers, etc)
@@ -472,22 +519,73 @@ app.get('/api/stream/:id', (req: Request, res: Response) => {
     }
 });
 
-// 7. Search Endpoint (Optimized)
+// 7. Search Endpoint (Fuzzy/Typo-tolerant)
 app.get('/api/search', (req: Request, res: Response) => {
     try {
         const { q } = req.query;
         const page = parseInt(req.query.page as string) || 1;
-        const limit = Math.min(parseInt(req.query.limit as string) || 50, 100); // Cap at 100
+        const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
         const offset = (page - 1) * limit;
 
         if (!q || (q as string).trim().length === 0) {
             return res.status(400).json({ error: 'Search query parameter is required' });
         }
 
-        const query = `%${(q as string).trim()}%`;
+        const searchTerm = (q as string).trim().toLowerCase();
+        const likeQuery = `%${searchTerm}%`;
 
-        // Optimized search with UNION to avoid LEFT JOIN performance issues
-        const sql = `
+        // Check for sonic profile match
+        const sonicProfileSql = sonicProfiles.getProfileSql(searchTerm);
+        const matchedProfileName = sonicProfiles.SONIC_PROFILES.find(p => p.name.toLowerCase() === searchTerm)?.name;
+
+        // Helper function for fuzzy matching score
+        function fuzzyScore(str: string | null, query: string): number {
+            if (!str) return 0;
+            const s = str.toLowerCase();
+
+            // Exact match
+            if (s === query) return 100;
+
+            // Starts with query
+            if (s.startsWith(query)) return 90;
+
+            // Contains query
+            if (s.includes(query)) return 70;
+
+            // Fuzzy: check if all chars exist in order
+            let queryIdx = 0;
+            let consecutive = 0;
+            let maxConsecutive = 0;
+
+            for (let i = 0; i < s.length && queryIdx < query.length; i++) {
+                if (s[i] === query[queryIdx]) {
+                    queryIdx++;
+                    consecutive++;
+                    maxConsecutive = Math.max(maxConsecutive, consecutive);
+                } else {
+                    consecutive = 0;
+                }
+            }
+
+            if (queryIdx === query.length) {
+                // All characters found in order
+                return 30 + (maxConsecutive / query.length) * 30;
+            }
+
+            // Levenshtein-inspired: count matching characters
+            const matches = query.split('').filter(c => s.includes(c)).length;
+            const matchRatio = matches / query.length;
+
+            if (matchRatio > 0.6) {
+                return matchRatio * 25;
+            }
+
+            return 0;
+        }
+
+        // Get all potential matches with LIKE first (for performance)
+        // Then score and re-rank with fuzzy algorithm
+        let sql = `
             SELECT DISTINCT t.*
             FROM tracks t
             WHERE t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ? OR t.genre LIKE ? OR t.mood LIKE ?
@@ -496,31 +594,90 @@ app.get('/api/search', (req: Request, res: Response) => {
             FROM tracks t
             JOIN credits c ON c.track_id = t.id
             WHERE c.name LIKE ?
-            ORDER BY artist, album, title
-            LIMIT ? OFFSET ?
         `;
 
-        const results = db.prepare(sql).all(query, query, query, query, query, query, limit, offset) as Track[];
+        const params: any[] = [likeQuery, likeQuery, likeQuery, likeQuery, likeQuery, likeQuery];
 
-        // Get total count for pagination
-        const countSql = `
-            SELECT COUNT(*) as total FROM (
-                SELECT DISTINCT t.id
-                FROM tracks t
-                WHERE t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ? OR t.genre LIKE ? OR t.mood LIKE ?
-                UNION
-                SELECT DISTINCT t.id
-                FROM tracks t
-                JOIN credits c ON c.track_id = t.id
-                WHERE c.name LIKE ?
-            )
-        `;
+        // Add Sonic Profile query if matched
+        if (sonicProfileSql) {
+            sql += `
+            UNION
+            SELECT DISTINCT t.*
+            FROM tracks t
+            WHERE ${sonicProfileSql.sql}
+            `;
+            params.push(...sonicProfileSql.params);
+        }
 
-        const totalResult = db.prepare(countSql).get(query, query, query, query, query, query) as { total: number };
-        const total = totalResult.total;
+        let results = db.prepare(sql).all(...params) as (Track & { is_credit_match: number })[];
+
+        // If no results with LIKE, try broader fuzzy search
+        if (results.length === 0 && searchTerm.length >= 3) {
+            // Get more tracks and fuzzy match
+            const allTracks = db.prepare('SELECT * FROM tracks LIMIT 2000').all() as Track[];
+
+            results = allTracks.filter(t => {
+                const score = Math.max(
+                    fuzzyScore(t.title, searchTerm),
+                    fuzzyScore(t.artist, searchTerm),
+                    fuzzyScore(t.album || null, searchTerm),
+                    fuzzyScore(t.genre || null, searchTerm)
+                );
+                return score > 15;
+            }).map(t => ({ ...t, is_credit_match: 0 })); // Add is_credit_match for consistency
+        }
+
+        // Score and rank all results
+        const scoredResults = results.map(track => {
+            let score = 0;
+            const t = track;
+
+            // Base score for finding it
+            if (t.is_credit_match) {
+                const creditScore = fuzzyScore(searchTerm, searchTerm); // Use 100 base score logic effectively? 
+                // Wait, if it matched via LIKE, it matched.
+                // We should give it a substantial bonus if it came from credits.
+                score += 80;
+            }
+
+            const titleScore = fuzzyScore(t.title, searchTerm);
+            const artistScore = fuzzyScore(t.artist, searchTerm);
+            const albumScore = fuzzyScore(t.album || null, searchTerm);
+            const genreScore = fuzzyScore(t.genre || null, searchTerm);
+
+            let sonicBonus = 0;
+            if (matchedProfileName && sonicProfiles.getTrackProfiles) {
+                const trackProfiles = sonicProfiles.getTrackProfiles({
+                    energy: t.energy || 0,
+                    valence: t.valence || 0,
+                    danceability: t.danceability || 0,
+                    bpm: t.bpm || 0
+                });
+                if (trackProfiles.includes(matchedProfileName)) {
+                    sonicBonus = 200; // Massive bonus for sonic match
+                }
+            }
+
+            // Weight: title > artist > album > genre
+            // If is_credit_match, that 80 points helps it float up if other scores are 0.
+            const totalScore = Math.max(score, titleScore * 1.5 + artistScore * 1.3 + albumScore * 1.1 + genreScore + sonicBonus);
+
+            return { ...t, _fuzzyScore: totalScore };
+        });
+
+        // Sort by fuzzy score
+        scoredResults.sort((a, b) => b._fuzzyScore - a._fuzzyScore);
+
+        // Paginate
+        const total = scoredResults.length;
+        const paginatedResults = scoredResults.slice(offset, offset + limit).map(r => {
+            // Remove internal flags
+            const { _fuzzyScore, is_credit_match, ...rest } = r as any;
+            return rest;
+        });
 
         res.json({
-            results,
+            results: paginatedResults,
             pagination: {
                 page,
                 limit,
@@ -632,20 +789,21 @@ app.post('/api/scan', auth.requireAdmin, (req: AuthRequest, res: Response) => {
 
 
 // 10. Start MusicBrainz Enrichment (Admin only)
-app.post('/api/enrich', auth.requireAdmin, async (_req: AuthRequest, res: Response) => {
+app.post('/api/enrich', auth.authenticateToken, auth.requireAdmin, async (_req: AuthRequest, res: Response) => {
     musicbrainz.startEnrichment();
     res.json({ message: 'Enrichment started' });
 });
 
 // 10a. Fast album-based enrichment (Admin only)
-app.post('/api/enrich/fast', auth.requireAdmin, async (req: AuthRequest, res: Response) => {
+app.post('/api/enrich/fast', auth.authenticateToken, auth.requireAdmin, async (req: AuthRequest, res: Response) => {
     const workerCount = parseInt(req.body?.workers as string) || 3;
     musicbrainz.startAlbumEnrichment(workerCount);
     res.json({ message: `Fast album-based enrichment started with ${workerCount} workers` });
 });
 
+
 // 10b. Bulk enrich artist bios (Admin only)
-app.post('/api/enrich/artists', auth.requireAdmin, async (_req: AuthRequest, res: Response) => {
+app.post('/api/enrich/artists', auth.authenticateToken, auth.requireAdmin, async (_req: AuthRequest, res: Response) => {
     try {
         // Get all artists without descriptions
         const artists = db.prepare('SELECT * FROM artists WHERE description IS NULL OR description = ""').all() as Artist[];
@@ -935,6 +1093,33 @@ app.get('/api/credits/album/:album', (req: Request, res: Response) => {
     res.json(grouped);
 });
 
+// 15a. Get Credits for Album AND Artist
+app.get('/api/credits/album/:album/:artist', (req: Request, res: Response) => {
+    const { album, artist } = req.params;
+
+    const credits = db.prepare(`
+    SELECT c.*, t.title as track_title
+    FROM credits c
+    JOIN tracks t ON c.track_id = t.id
+    WHERE t.album = ? AND t.artist = ?
+    ORDER BY c.role, c.name
+  `).all(album, artist) as (Credit & { track_title: string })[];
+
+    // Filter duplicates (ensure unique credits per album)
+    const uniqueCredits: typeof credits = [];
+    const seen = new Set<string>();
+
+    for (const c of credits) {
+        const key = `${c.role}|||${c.name}|||${c.artist_mbid}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            uniqueCredits.push(c);
+        }
+    }
+
+    res.json(uniqueCredits);
+});
+
 // 16. Get Extended Album Metadata
 app.get('/api/album-metadata', (req: Request, res: Response) => {
     const { album, artist } = req.query;
@@ -1070,6 +1255,19 @@ app.post('/api/auth/lastfm/token', auth.authenticateToken, async (req: AuthReque
         .run(session.sessionKey, session.username, req.user!.id);
 
     res.json({ success: true, username: session.username });
+});
+
+// Get Last.fm connection status for current user
+app.get('/api/user/lastfm-status', auth.authenticateToken, (req: AuthRequest, res: Response) => {
+    const user = db.prepare('SELECT lastfm_username, lastfm_session_key FROM users WHERE id = ?')
+        .get(req.user!.id) as { lastfm_username: string | null; lastfm_session_key: string | null } | undefined;
+
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    res.json({
+        connected: !!user.lastfm_session_key,
+        username: user.lastfm_username
+    });
 });
 
 // Last.fm Scrobble
@@ -1768,6 +1966,755 @@ app.get('/api/labels/:id', (req: Request, res: Response) => {
     `).all(label.mbid);
 
     res.json({ ...label, albums });
+});
+
+// ========== SMART MIXES (CURATION) ENDPOINTS ==========
+
+interface FilterRules {
+    bpm?: { min?: number; max?: number };
+    mood?: string[];
+    genre?: string[];
+    key?: string[];
+    rating?: { min?: number };
+    recentlyAdded?: number; // days
+    recentlyPlayed?: number; // days
+}
+
+// Get all smart mixes
+app.get('/api/mixes', (req: Request, res: Response) => {
+    const mixes = db.prepare(`
+        SELECT id, name, description, icon, filter_rules, sort_order, is_system
+        FROM smart_mixes
+        ORDER BY sort_order ASC
+    `).all();
+    res.json(mixes);
+});
+
+// Get tracks for a specific smart mix
+app.get('/api/mixes/:id/tracks', (req: Request, res: Response) => {
+    const { id } = req.params;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+    const offset = parseInt(req.query.offset as string) || 0;
+
+    const mix = db.prepare('SELECT filter_rules FROM smart_mixes WHERE id = ?').get(id) as { filter_rules: string } | undefined;
+    if (!mix) return res.status(404).json({ error: 'Mix not found' });
+
+    let rules: FilterRules;
+    try {
+        rules = JSON.parse(mix.filter_rules);
+    } catch (e) {
+        return res.status(500).json({ error: 'Invalid filter rules' });
+    }
+
+    // Build dynamic WHERE clauses
+    const conditions: string[] = ['1=1'];
+    const params: any[] = [];
+
+    if (rules.bpm) {
+        if (rules.bpm.min) { conditions.push('bpm >= ?'); params.push(rules.bpm.min); }
+        if (rules.bpm.max) { conditions.push('bpm <= ?'); params.push(rules.bpm.max); }
+    }
+
+    if (rules.mood && rules.mood.length > 0) {
+        const moodConditions = rules.mood.map(() => 'LOWER(mood) LIKE ?').join(' OR ');
+        conditions.push(`(${moodConditions})`);
+        rules.mood.forEach(m => params.push(`%${m.toLowerCase()}%`));
+    }
+
+    if (rules.genre && rules.genre.length > 0) {
+        const genreConditions = rules.genre.map(() => 'LOWER(genre) LIKE ?').join(' OR ');
+        conditions.push(`(${genreConditions})`);
+        rules.genre.forEach(g => params.push(`%${g.toLowerCase()}%`));
+    }
+
+    if (rules.key && rules.key.length > 0) {
+        const keyPlaceholders = rules.key.map(() => '?').join(', ');
+        conditions.push(`key IN (${keyPlaceholders})`);
+        params.push(...rules.key);
+    }
+
+    if (rules.rating?.min) {
+        conditions.push('rating >= ?');
+        params.push(rules.rating.min);
+    }
+
+    if (rules.recentlyAdded) {
+        conditions.push(`added_at >= datetime('now', '-' || ? || ' days')`);
+        params.push(rules.recentlyAdded);
+    }
+
+    const query = `
+        SELECT * FROM tracks
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY RANDOM()
+        LIMIT ? OFFSET ?
+    `;
+    params.push(limit, offset);
+
+    const tracks = db.prepare(query).all(...params);
+    res.json(tracks);
+});
+
+// ========== CONTENT SIMILARITY ("More Like This") ==========
+
+// Helper: Check if two musical keys are compatible
+function isCompatibleKey(key1: string, key2: string): boolean {
+    // Circle of fifths compatibility (simplified)
+    const compatibilityMap: Record<string, string[]> = {
+        'C': ['G', 'F', 'Am'],
+        'G': ['C', 'D', 'Em'],
+        'D': ['G', 'A', 'Bm'],
+        'A': ['D', 'E', 'F#m'],
+        'E': ['A', 'B', 'C#m'],
+        'B': ['E', 'F#', 'G#m'],
+        'F#': ['B', 'C#', 'D#m'],
+        'F': ['C', 'Bb', 'Dm'],
+        'Bb': ['F', 'Eb', 'Gm'],
+        'Eb': ['Bb', 'Ab', 'Cm'],
+        'Ab': ['Eb', 'Db', 'Fm'],
+        'Db': ['Ab', 'Gb', 'Bbm'],
+        'Am': ['C', 'Em', 'Dm'],
+        'Em': ['G', 'Am', 'Bm'],
+        'Bm': ['D', 'Em', 'F#m'],
+        'F#m': ['A', 'Bm', 'C#m'],
+        'C#m': ['E', 'F#m', 'G#m'],
+        'G#m': ['B', 'C#m', 'D#m'],
+        'Dm': ['F', 'Am', 'Gm'],
+        'Gm': ['Bb', 'Dm', 'Cm'],
+        'Cm': ['Eb', 'Gm', 'Fm'],
+        'Fm': ['Ab', 'Cm', 'Bbm'],
+        'Bbm': ['Db', 'Fm', 'Ebm'],
+    };
+    return compatibilityMap[key1]?.includes(key2) || compatibilityMap[key2]?.includes(key1) || false;
+}
+
+// Get similar tracks
+app.get('/api/similar/:trackId', (req: Request, res: Response) => {
+    const { trackId } = req.params;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+
+    const sourceTrack = db.prepare('SELECT * FROM tracks WHERE id = ?').get(trackId) as any;
+    if (!sourceTrack) return res.status(404).json({ error: 'Track not found' });
+
+    // Get candidate tracks (exclude source, same artist, similar BPM range)
+    const candidates = db.prepare(`
+        SELECT * FROM tracks
+        WHERE id != ?
+        AND (
+            (bpm BETWEEN ? AND ?)
+            OR genre = ?
+            OR artist = ?
+        )
+        LIMIT 500
+    `).all(
+        trackId,
+        (sourceTrack.bpm || 100) - 30,
+        (sourceTrack.bpm || 100) + 30,
+        sourceTrack.genre || '',
+        sourceTrack.artist
+    ) as any[];
+
+    // Score each candidate
+    const scored = candidates.map(candidate => {
+        let score = 0;
+
+        // BPM similarity (max 10 points)
+        if (sourceTrack.bpm && candidate.bpm) {
+            const bpmDiff = Math.abs(sourceTrack.bpm - candidate.bpm);
+            score += Math.max(0, 10 - bpmDiff * 0.5);
+        }
+
+        // Key compatibility (5 points same, 3 points compatible)
+        if (sourceTrack.key && candidate.key) {
+            if (sourceTrack.key === candidate.key) score += 5;
+            else if (isCompatibleKey(sourceTrack.key, candidate.key)) score += 3;
+        }
+
+        // Genre match (8 points)
+        if (sourceTrack.genre && candidate.genre &&
+            sourceTrack.genre.toLowerCase() === candidate.genre.toLowerCase()) {
+            score += 8;
+        }
+
+        // Mood match (5 points)
+        if (sourceTrack.mood && candidate.mood &&
+            candidate.mood.toLowerCase().includes(sourceTrack.mood.toLowerCase())) {
+            score += 5;
+        }
+
+        // Same artist bonus (3 points)
+        if (sourceTrack.artist === candidate.artist) score += 3;
+
+        // Same era bonus (2 points for within 5 years)
+        if (sourceTrack.year && candidate.year && Math.abs(sourceTrack.year - candidate.year) <= 5) {
+            score += 2;
+        }
+
+        return { ...candidate, similarity_score: score };
+    });
+
+    // Sort by score and diversify (max 3 per artist)
+    scored.sort((a, b) => b.similarity_score - a.similarity_score);
+
+    const artistCounts: Record<string, number> = {};
+    const diversified = scored.filter(track => {
+        const count = artistCounts[track.artist] || 0;
+        if (count >= 3) return false;
+        artistCounts[track.artist] = count + 1;
+        return true;
+    }).slice(0, limit);
+
+    res.json(diversified);
+});
+
+// ========== PERSONALIZED RECOMMENDATIONS ==========
+
+app.get('/api/personalized', auth.authenticateToken, (req: AuthRequest, res: Response) => {
+    const limit = Math.min(parseInt(req.query.limit as string) || 30, 100);
+
+    // Get user's top genres based on listening history
+    const topGenres = db.prepare(`
+        SELECT t.genre, COUNT(*) as play_count
+        FROM listening_history h
+        JOIN tracks t ON h.track_id = t.id
+        WHERE h.user_id = ? AND t.genre IS NOT NULL AND t.genre != ''
+        GROUP BY t.genre
+        ORDER BY play_count DESC
+        LIMIT 5
+    `).all(req.user!.id) as { genre: string; play_count: number }[];
+
+    if (topGenres.length === 0) {
+        // No history, return random popular tracks
+        const randomTracks = db.prepare(`
+            SELECT * FROM tracks
+            WHERE has_art = 1
+            ORDER BY RANDOM()
+            LIMIT ?
+        `).all(limit);
+        return res.json(randomTracks);
+    }
+
+    // Find tracks in user's preferred genres that they haven't played recently
+    const genreList = topGenres.map(g => g.genre);
+    const genrePlaceholders = genreList.map(() => '?').join(', ');
+
+    const recommendations = db.prepare(`
+        SELECT t.*, 
+               CASE WHEN t.genre IN (${genrePlaceholders}) THEN 1 ELSE 0 END as genre_match
+        FROM tracks t
+        WHERE t.id NOT IN (
+            SELECT track_id FROM listening_history 
+            WHERE user_id = ? AND played_at > datetime('now', '-7 days')
+        )
+        AND (t.genre IN (${genrePlaceholders}) OR t.mood IS NOT NULL)
+        ORDER BY genre_match DESC, RANDOM()
+        LIMIT ?
+    `).all(...genreList, req.user!.id, ...genreList, limit);
+
+    // Diversify by artist (max 3 per artist)
+    const artistCounts: Record<string, number> = {};
+    const diversified = (recommendations as any[]).filter(track => {
+        const count = artistCounts[track.artist] || 0;
+        if (count >= 3) return false;
+        artistCounts[track.artist] = count + 1;
+        return true;
+    });
+
+    res.json(diversified);
+});
+
+// ========== AUDIO ANALYSIS ADMIN ENDPOINTS ==========
+
+// Start library audio analysis
+app.post('/api/admin/analyze-library', auth.authenticateToken, auth.requireAdmin, async (req: AuthRequest, res: Response) => {
+    const { reanalyze } = req.body || {};
+
+    // Start analysis in background
+    audioAnalyzer.analyzeLibrary(!reanalyze).catch(err => {
+        console.error('Audio analysis error:', err);
+    });
+
+    const progress = audioAnalyzer.getProgress();
+    res.json({ status: 'started', total: progress.total });
+});
+
+// Get analysis progress
+app.get('/api/admin/analyze-status', auth.authenticateToken, auth.requireAdmin, (req: AuthRequest, res: Response) => {
+    const progress = audioAnalyzer.getProgress();
+    res.json({
+        status: progress.status,
+        total: progress.total,
+        completed: progress.completed,
+        current: progress.current,
+        percentComplete: progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0,
+        startedAt: progress.startedAt,
+        errorCount: progress.errors.length,
+        recentErrors: progress.errors.slice(-5)
+    });
+});
+
+// Stop analysis
+app.post('/api/admin/analyze-stop', auth.authenticateToken, auth.requireAdmin, (req: AuthRequest, res: Response) => {
+    audioAnalyzer.stopAnalysis();
+    res.json({ status: 'stopped' });
+});
+
+// Analyze single track (for testing)
+app.post('/api/admin/analyze-track/:id', auth.authenticateToken, auth.requireAdmin, async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const track = db.prepare('SELECT id, path FROM tracks WHERE id = ?').get(id) as { id: number; path: string } | undefined;
+
+    if (!track) return res.status(404).json({ error: 'Track not found' });
+
+    const result = await audioAnalyzer.analyzeTrack(track.path);
+
+    if (result.success) {
+        audioAnalyzer.updateTrackAnalysis(track.id, result);
+    }
+
+    res.json(result);
+});
+
+// ========== SIMILAR ALBUMS ENDPOINT ==========
+
+app.get('/api/similar-albums', (req: Request, res: Response) => {
+    const { album, artist, limit: limitParam } = req.query;
+    const limit = Math.min(parseInt(limitParam as string) || 10, 20);
+
+    if (!album || !artist) {
+        return res.status(400).json({ error: 'album and artist parameters required' });
+    }
+
+    // Get the source album's metadata and average audio features
+    const sourceData = db.prepare(`
+        SELECT 
+            t.year, 
+            t.genre, 
+            t.release_mbid,
+            r.label_mbid,
+            r.country,
+            AVG(t.energy) as avg_energy,
+            AVG(t.valence) as avg_valence,
+            AVG(t.danceability) as avg_danceability
+        FROM tracks t
+        LEFT JOIN releases r ON t.release_mbid = r.mbid
+        WHERE t.album = ? AND t.artist = ? 
+        LIMIT 1
+    `).get(album, artist) as {
+        year: number | null;
+        genre: string | null;
+        release_mbid: string | null;
+        label_mbid: string | null;
+        country: string | null;
+        avg_energy: number | null;
+        avg_valence: number | null;
+        avg_danceability: number | null;
+    } | undefined;
+
+    if (!sourceData) {
+        return res.status(404).json({ error: 'Album not found' });
+    }
+
+    // Get tags for the source album
+    interface TagRow { name: string; count: number }
+    let sourceTags: TagRow[] = [];
+    if (sourceData.release_mbid) {
+        const releaseRow = db.prepare('SELECT id FROM releases WHERE mbid = ?').get(sourceData.release_mbid) as { id: number } | undefined;
+        if (releaseRow) {
+            sourceTags = db.prepare(`
+                SELECT t.name, et.count 
+                FROM entity_tags et 
+                JOIN tags t ON et.tag_id = t.id 
+                WHERE et.entity_type = 'release' AND et.entity_id = ?
+                ORDER BY et.count DESC
+            `).all(releaseRow.id) as TagRow[];
+        }
+    }
+
+    // Get candidate albums with metadata and audio stats
+    interface AlbumRow {
+        album: string;
+        artist: string;
+        year: number | null;
+        genre: string | null;
+        release_mbid: string | null;
+        label_mbid: string | null;
+        country: string | null;
+        avg_energy: number | null;
+        avg_valence: number | null;
+        sample_track_id: number;
+        has_art: number;
+    }
+
+    const candidateAlbums = db.prepare(`
+        SELECT 
+            t.album, 
+            t.artist, 
+            MIN(t.year) as year, 
+            t.genre, 
+            MIN(t.release_mbid) as release_mbid,
+            MIN(r.label_mbid) as label_mbid,
+            MIN(r.country) as country,
+            AVG(t.energy) as avg_energy,
+            AVG(t.valence) as avg_valence,
+            MIN(t.id) as sample_track_id,
+            MAX(t.has_art) as has_art
+        FROM tracks t
+        LEFT JOIN releases r ON t.release_mbid = r.mbid
+        WHERE t.album IS NOT NULL 
+            AND t.album != '' 
+            AND t.album != ? -- Strictly exclude the source album name to prevent variants showing up
+        GROUP BY t.album -- Group by album name only to merge 'feat.' variants
+        LIMIT 500
+    `).all(album) as AlbumRow[];
+
+    // Score each album
+    interface ScoredAlbum extends AlbumRow {
+        similarity_score: number;
+        matching_tags: string[];
+    }
+
+    const scored: ScoredAlbum[] = candidateAlbums.map(candidate => {
+        let score = 0;
+        let matchingTags: string[] = [];
+
+        // 1. Metadata Factors
+
+        // Same artist: +10
+        if (candidate.artist.toLowerCase() === (artist as string).toLowerCase()) {
+            score += 10;
+        }
+
+        // Same Label: +10 (Strong shared scene indicator)
+        if (sourceData.label_mbid && candidate.label_mbid &&
+            sourceData.label_mbid === candidate.label_mbid) {
+            score += 10;
+            matchingTags.push('Label');
+        }
+
+        // Same Country: +5 (Scene/Location)
+        if (sourceData.country && candidate.country &&
+            sourceData.country === candidate.country) {
+            score += 5;
+            matchingTags.push(candidate.country);
+        }
+
+        // Genre match: +8
+        if (sourceData.genre && candidate.genre &&
+            candidate.genre.toLowerCase() === sourceData.genre.toLowerCase()) {
+            score += 8;
+        }
+
+        // Era match: +5 (Exponential decay based on year difference)
+        if (sourceData.year && candidate.year) {
+            const diff = Math.abs(sourceData.year - candidate.year);
+            if (diff === 0) score += 5;
+            else if (diff <= 2) score += 4;
+            else if (diff <= 5) score += 2;
+        }
+
+        // 2. Audio Vibe Factors (Replacing pure BPM with Energy/Valence)
+
+        if (sourceData.avg_energy !== null && candidate.avg_energy !== null) {
+            const distEntry = Math.abs(sourceData.avg_energy - candidate.avg_energy);
+            // If energy is within 10%, +8 points
+            if (distEntry < 0.1) score += 8;
+            else if (distEntry < 0.2) score += 4;
+        }
+
+        if (sourceData.avg_valence !== null && candidate.avg_valence !== null) {
+            const distValence = Math.abs(sourceData.avg_valence - candidate.avg_valence);
+            // If valence (mood) is within 15%, +7 points
+            if (distValence < 0.15) score += 7;
+            else if (distValence < 0.25) score += 3;
+        }
+
+        // 3. Detailed Tag Matching
+        if (sourceTags.length > 0 && candidate.release_mbid) {
+            const candidateRelease = db.prepare('SELECT id FROM releases WHERE mbid = ?').get(candidate.release_mbid) as { id: number } | undefined;
+            if (candidateRelease) {
+                const candidateTags = db.prepare(`
+                    SELECT t.name FROM entity_tags et 
+                    JOIN tags t ON et.tag_id = t.id 
+                    WHERE et.entity_type = 'release' AND et.entity_id = ?
+                `).all(candidateRelease.id) as { name: string }[];
+
+                const candidateTagNames = new Set(candidateTags.map(t => t.name.toLowerCase()));
+                for (const sourceTag of sourceTags) {
+                    if (candidateTagNames.has(sourceTag.name.toLowerCase())) {
+                        score += 3; // Cumulative boost for shared tags
+                        matchingTags.push(sourceTag.name);
+                    }
+                }
+            }
+        }
+
+        return { ...candidate, similarity_score: score, matching_tags: [...new Set(matchingTags)] };
+    });
+
+    // Sort by score
+    scored.sort((a, b) => b.similarity_score - a.similarity_score);
+
+    // Filter for diversity: Max 1 album per artist, and strict source exclusion
+    const seenArtists = new Set<string>();
+    const diverseResults: ScoredAlbum[] = [];
+    const sourceName = (album as string).toLowerCase();
+
+    for (const candidate of scored) {
+        // Skip source album (duplicate check)
+        if (candidate.album.toLowerCase() === sourceName) continue;
+
+        if (candidate.similarity_score <= 5) continue; // Minimum score threshold
+
+        // Normalize artist (remove feat/ft)
+        const artistNormal = candidate.artist.toLowerCase()
+            .split(' feat.')[0]
+            .split(' ft.')[0]
+            .split(' featuring')[0]
+            .trim();
+
+        // Allow max 1 album per artist
+        if (!seenArtists.has(artistNormal)) {
+            diverseResults.push(candidate);
+            seenArtists.add(artistNormal);
+        }
+
+        if (diverseResults.length >= limit) break;
+    }
+
+    res.json(diverseResults);
+});
+
+// ========== SMART PLAYLIST GENERATION ==========
+
+interface PlaylistTemplate {
+    id: string;
+    name: string;
+    description: string;
+    icon: string;
+    params?: { name: string; type: string; default?: any; options?: string[] }[];
+}
+
+const PLAYLIST_TEMPLATES: PlaylistTemplate[] = [
+    {
+        id: 'anniversary',
+        name: 'Anniversary Albums',
+        description: 'Albums released X years ago this month',
+        icon: 'Calendar',
+        params: [{ name: 'yearsAgo', type: 'number', default: 10 }]
+    },
+    {
+        id: 'deep-catalog',
+        name: 'Deep Catalog',
+        description: 'Hidden gems with fewer than 3 plays',
+        icon: 'Archive',
+        params: []
+    },
+    {
+        id: 'high-energy',
+        name: 'High Energy',
+        description: 'Fast beats for workouts (BPM > 120, high energy)',
+        icon: 'Zap',
+        params: [{ name: 'minBpm', type: 'number', default: 120 }]
+    },
+    {
+        id: 'chill-mix',
+        name: 'Chill Mix',
+        description: 'Relaxed vibes for unwinding',
+        icon: 'Coffee',
+        params: []
+    },
+    {
+        id: 'danceable',
+        name: 'Danceability',
+        description: 'Tracks that make you move',
+        icon: 'Music',
+        params: [{ name: 'minDanceability', type: 'number', default: 0.6 }]
+    },
+    {
+        id: 'genre',
+        name: 'Genre Focus',
+        description: 'All tracks from a specific genre',
+        icon: 'Tag',
+        params: [{ name: 'genre', type: 'string', default: '' }]
+    },
+    {
+        id: 'upbeat',
+        name: 'Upbeat Mood',
+        description: 'Positive, happy vibes (high valence)',
+        icon: 'Sun',
+        params: [{ name: 'minValence', type: 'number', default: 0.6 }]
+    },
+    {
+        id: 'new-additions',
+        name: 'Recently Added',
+        description: 'Tracks added in the last X days',
+        icon: 'Clock',
+        params: [{ name: 'days', type: 'number', default: 30 }]
+    }
+];
+
+// Get available playlist templates
+app.get('/api/playlist-templates', (_req: Request, res: Response) => {
+    res.json(PLAYLIST_TEMPLATES);
+});
+
+// Generate playlist from template
+app.post('/api/playlists/generate', auth.authenticateToken, (req: AuthRequest, res: Response) => {
+    const { template, params = {}, name, save = true, limit: limitParam } = req.body;
+    const limit = Math.min(parseInt(limitParam) || 50, 200);
+
+    if (!template) {
+        return res.status(400).json({ error: 'Template ID required' });
+    }
+
+    const templateDef = PLAYLIST_TEMPLATES.find(t => t.id === template);
+    if (!templateDef) {
+        return res.status(404).json({ error: 'Template not found' });
+    }
+
+    let tracks: Track[] = [];
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+
+    switch (template) {
+        case 'anniversary': {
+            const yearsAgo = params.yearsAgo || 10;
+            const targetYear = currentYear - yearsAgo;
+            tracks = db.prepare(`
+                SELECT * FROM tracks 
+                WHERE year = ? 
+                ORDER BY RANDOM() 
+                LIMIT ?
+            `).all(targetYear, limit) as Track[];
+            break;
+        }
+
+        case 'deep-catalog': {
+            tracks = db.prepare(`
+                SELECT t.* FROM tracks t
+                LEFT JOIN listening_history h ON t.id = h.track_id
+                GROUP BY t.id
+                HAVING COUNT(h.id) < 3
+                ORDER BY RANDOM()
+                LIMIT ?
+            `).all(limit) as Track[];
+            break;
+        }
+
+        case 'high-energy': {
+            const minBpm = params.minBpm || 120;
+            tracks = db.prepare(`
+                SELECT * FROM tracks 
+                WHERE bpm >= ? AND (energy > 0.6 OR energy IS NULL)
+                ORDER BY bpm DESC, energy DESC
+                LIMIT ?
+            `).all(minBpm, limit) as Track[];
+            break;
+        }
+
+        case 'chill-mix': {
+            tracks = db.prepare(`
+                SELECT * FROM tracks 
+                WHERE (mood IN ('chill', 'mellow', 'calm', 'relaxed', 'neutral') 
+                       OR energy < 0.4 
+                       OR bpm < 100)
+                ORDER BY energy ASC, bpm ASC
+                LIMIT ?
+            `).all(limit) as Track[];
+            break;
+        }
+
+        case 'danceable': {
+            const minDanceability = params.minDanceability || 0.6;
+            tracks = db.prepare(`
+                SELECT * FROM tracks 
+                WHERE danceability >= ?
+                ORDER BY danceability DESC
+                LIMIT ?
+            `).all(minDanceability, limit) as Track[];
+            break;
+        }
+
+        case 'genre': {
+            const genre = params.genre || '';
+            if (!genre) {
+                return res.status(400).json({ error: 'Genre parameter required' });
+            }
+            tracks = db.prepare(`
+                SELECT * FROM tracks 
+                WHERE genre LIKE ?
+                ORDER BY RANDOM()
+                LIMIT ?
+            `).all(`%${genre}%`, limit) as Track[];
+            break;
+        }
+
+        case 'upbeat': {
+            const minValence = params.minValence || 0.6;
+            tracks = db.prepare(`
+                SELECT * FROM tracks 
+                WHERE valence >= ?
+                ORDER BY valence DESC
+                LIMIT ?
+            `).all(minValence, limit) as Track[];
+            break;
+        }
+
+        case 'new-additions': {
+            const days = params.days || 30;
+            tracks = db.prepare(`
+                SELECT * FROM tracks 
+                WHERE created_at >= datetime('now', ?)
+                ORDER BY created_at DESC
+                LIMIT ?
+            `).all(`-${days} days`, limit) as Track[];
+            break;
+        }
+
+        default:
+            return res.status(400).json({ error: 'Invalid template' });
+    }
+
+    if (tracks.length === 0) {
+        return res.json({
+            message: 'No tracks found matching criteria',
+            tracks: [],
+            saved: false
+        });
+    }
+
+    // If save is true, create a playlist
+    let playlistId: number | null = null;
+    if (save) {
+        const playlistName = name || `${templateDef.name} - ${new Date().toLocaleDateString()}`;
+
+        const result = db.prepare(`
+            INSERT INTO playlists (name, user_id, created_at, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `).run(playlistName, req.user!.id);
+
+        playlistId = Number(result.lastInsertRowid);
+
+        // Add tracks to playlist
+        const insertTrack = db.prepare(`
+            INSERT INTO playlist_tracks (playlist_id, track_id, position)
+            VALUES (?, ?, ?)
+        `);
+
+        tracks.forEach((track, idx) => {
+            insertTrack.run(playlistId, track.id, idx + 1);
+        });
+    }
+
+    res.json({
+        template: templateDef.name,
+        tracks,
+        trackCount: tracks.length,
+        saved: save,
+        playlistId,
+        playlistName: save ? (name || `${templateDef.name} - ${new Date().toLocaleDateString()}`) : null
+    });
 });
 
 // Start Server

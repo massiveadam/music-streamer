@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { RefreshCcw, Save, Trash2, Check, ExternalLink } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { RefreshCcw, Save, Trash2, Check, ExternalLink, Music, Loader } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { audioEngine, BUILT_IN_PRESETS, EQPreset } from '../audio/AudioEngine';
@@ -12,8 +12,17 @@ interface SettingsPageProps {
     setShowScanOverlay: (show: boolean) => void;
 }
 
+interface AnalysisStatus {
+    status: 'idle' | 'running' | 'completed' | 'error';
+    total: number;
+    completed: number;
+    current: string | null;
+    percentComplete: number;
+    errorCount: number;
+}
+
 export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: SettingsPageProps) {
-    const { user } = useAuth();
+    const { user, token } = useAuth();
     const [lastFmConnected, setLastFmConnected] = useState(false);
     const [lastFmUsername, setLastFmUsername] = useState<string | null>(null);
     const [eqPresets, setEqPresets] = useState<EQPreset[]>([...BUILT_IN_PRESETS]);
@@ -21,14 +30,45 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
     const [usersList, setUsersList] = useState<any[]>([]);
 
     // System Settings (Admin)
-    const [systemSettings, setSystemSettings] = useState({ lastfm_api_key: '', lastfm_api_secret: '' });
+    const [systemSettings, setSystemSettings] = useState({ lastfm_api_key: '', lastfm_api_secret: '', discogs_consumer_key: '', discogs_consumer_secret: '' });
     const [publicLastFmKey, setPublicLastFmKey] = useState<string>('');
+
+    // Audio Analysis State
+    const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>({
+        status: 'idle', total: 0, completed: 0, current: null, percentComplete: 0, errorCount: 0
+    });
+
+    // Enrichment Status State
+    interface EnrichmentStatus {
+        isEnriching: boolean;
+        total: number;
+        processed: number;
+        currentTrack: string | null;
+        mode: 'track' | 'album';
+        albumsTotal?: number;
+        albumsProcessed?: number;
+    }
+    const [enrichmentStatus, setEnrichmentStatus] = useState<EnrichmentStatus>({
+        isEnriching: false, total: 0, processed: 0, currentTrack: null, mode: 'album'
+    });
 
     useEffect(() => {
         // Fetch public config
         axios.get(`${SERVER_URL}/api/config/public`).then(res => {
             setPublicLastFmKey(res.data.lastfm_api_key);
         });
+
+        // Fetch Last.fm status for current user
+        if (token) {
+            axios.get(`${SERVER_URL}/api/user/lastfm-status`, {
+                headers: { Authorization: `Bearer ${token}` }
+            }).then(res => {
+                if (res.data.connected) {
+                    setLastFmConnected(true);
+                    setLastFmUsername(res.data.username);
+                }
+            }).catch(console.error);
+        }
 
         // Fetch users and system settings if admin
         if (user?.is_admin === 1) {
@@ -40,7 +80,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                 .then(res => setSystemSettings(res.data))
                 .catch(console.error);
         }
-    }, [user]);
+    }, [user, token]);
 
     useEffect(() => {
         // combine built-in presets with user device profiles (if any stored locally or fetched)
@@ -127,6 +167,85 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
             .catch(err => alert("Failed to save settings: " + err.message));
     };
 
+    // Poll analysis status when running
+    const pollAnalysisStatus = useCallback(async () => {
+        try {
+            const res = await axios.get(`${SERVER_URL}/api/admin/analyze-status`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setAnalysisStatus(res.data);
+        } catch (e) {
+            console.error('Failed to poll analysis status:', e);
+        }
+    }, [token]);
+
+    // Poll enrichment status
+    const pollEnrichmentStatus = useCallback(async () => {
+        try {
+            const res = await axios.get(`${SERVER_URL}/api/enrich/status`);
+            setEnrichmentStatus(res.data);
+        } catch (e) {
+            console.error('Failed to poll enrichment status:', e);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (user?.is_admin === 1) {
+            // Initial fetch
+            pollAnalysisStatus();
+            pollEnrichmentStatus();
+
+            // Poll every 3 seconds while either is running
+            const interval = setInterval(() => {
+                if (analysisStatus.status === 'running') {
+                    pollAnalysisStatus();
+                }
+                if (enrichmentStatus.isEnriching) {
+                    pollEnrichmentStatus();
+                }
+            }, 3000);
+            return () => clearInterval(interval);
+        }
+    }, [user, pollAnalysisStatus, pollEnrichmentStatus, analysisStatus.status, enrichmentStatus.isEnriching]);
+
+    const handleStartAnalysis = async (reanalyze = false) => {
+        try {
+            await axios.post(`${SERVER_URL}/api/admin/analyze-library`, { reanalyze }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            // Start polling immediately
+            setTimeout(pollAnalysisStatus, 500);
+        } catch (e: any) {
+            alert('Failed to start analysis: ' + (e.response?.data?.error || e.message));
+        }
+    };
+
+    // Start both enrichment and analysis (full metadata processing)
+    const handleStartFullProcessing = async () => {
+        try {
+            // Start enrichment first
+            await axios.post(`${SERVER_URL}/api/enrich/fast`, { workers: 3 }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            setTimeout(pollEnrichmentStatus, 500);
+
+            // Analysis will auto-start when enrichment completes (or can be started manually)
+        } catch (e: any) {
+            alert('Failed to start enrichment: ' + (e.response?.data?.error || e.message));
+        }
+    };
+
+    const handleStopAnalysis = async () => {
+        try {
+            await axios.post(`${SERVER_URL}/api/admin/analyze-stop`, {}, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            pollAnalysisStatus();
+        } catch (e: any) {
+            alert('Failed to stop analysis: ' + e.message);
+        }
+    };
+
     return (
         <div className="flex-1 overflow-y-auto p-8 bg-app-bg">
             <div className="max-w-2xl mx-auto">
@@ -159,6 +278,33 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                                     placeholder="Enter your Last.fm Shared Secret"
                                 />
                             </div>
+
+                            {/* Discogs Settings */}
+                            <div className="border-t border-app-bg pt-4 mt-4">
+                                <h4 className="text-sm font-medium text-app-text-muted mb-3">Discogs (Fallback for rare releases)</h4>
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="block text-sm font-medium text-app-text mb-2">Discogs Consumer Key</label>
+                                        <input
+                                            type="text"
+                                            value={systemSettings.discogs_consumer_key}
+                                            onChange={e => setSystemSettings({ ...systemSettings, discogs_consumer_key: e.target.value })}
+                                            className="w-full bg-app-bg border border-app-surface focus:border-app-accent rounded-lg px-4 py-3 text-app-text outline-none transition-colors"
+                                            placeholder="Enter your Discogs Consumer Key"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-app-text mb-2">Discogs Consumer Secret</label>
+                                        <input
+                                            type="password"
+                                            value={systemSettings.discogs_consumer_secret}
+                                            onChange={e => setSystemSettings({ ...systemSettings, discogs_consumer_secret: e.target.value })}
+                                            className="w-full bg-app-bg border border-app-surface focus:border-app-accent rounded-lg px-4 py-3 text-app-text outline-none transition-colors"
+                                            placeholder="Enter your Discogs Consumer Secret"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
                             <button
                                 onClick={saveSystemSettings}
                                 className="bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-6 py-2 font-medium transition-colors text-sm"
@@ -167,6 +313,75 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                                 Save System Settings
                             </button>
                         </div>
+                    </div>
+                )}
+
+                {/* Audio Analysis (Admin Only) */}
+                {user?.is_admin === 1 && (
+                    <div className="bg-app-surface rounded-xl p-6 mb-6 border border-purple-500/20">
+                        <h2 className="text-lg font-bold text-app-text mb-4 flex items-center gap-2">
+                            <Music size={20} className="text-purple-400" />
+                            Audio Analysis
+                            <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded uppercase tracking-wide">Admin</span>
+                        </h2>
+                        <p className="text-sm text-app-text-muted mb-4">
+                            Analyze your library to extract BPM, key, mood, energy, and danceability for each track.
+                            This data powers Smart Mixes and "More Like This" recommendations.
+                        </p>
+
+                        {analysisStatus.status === 'running' ? (
+                            <div className="space-y-3">
+                                <div className="flex justify-between text-sm text-app-text">
+                                    <span>Analyzing: {analysisStatus.current || '...'}</span>
+                                    <span>{analysisStatus.completed}/{analysisStatus.total}</span>
+                                </div>
+                                <div className="w-full bg-app-bg rounded-full h-3 overflow-hidden">
+                                    <div
+                                        className="bg-app-accent h-full transition-all duration-300"
+                                        style={{ width: `${analysisStatus.percentComplete}%` }}
+                                    />
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <span className="text-xs text-app-text-muted">
+                                        {analysisStatus.percentComplete}% complete • {analysisStatus.errorCount} errors
+                                    </span>
+                                    <button
+                                        onClick={handleStopAnalysis}
+                                        className="text-red-400 hover:text-red-300 text-sm font-medium transition-colors"
+                                    >
+                                        Stop Analysis
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-wrap gap-3">
+                                <button
+                                    onClick={() => handleStartAnalysis(false)}
+                                    className="bg-purple-600 hover:bg-purple-700 text-white rounded-lg px-5 py-2 font-medium transition-colors flex items-center gap-2"
+                                >
+                                    {analysisStatus.status === 'idle' ? (
+                                        <Music size={16} />
+                                    ) : (
+                                        <Loader size={16} className="animate-spin" />
+                                    )}
+                                    Analyze New Tracks
+                                </button>
+                                <button
+                                    onClick={() => handleStartAnalysis(true)}
+                                    className="bg-app-bg border border-purple-500/30 hover:bg-purple-600/10 text-purple-300 rounded-lg px-5 py-2 font-medium transition-colors flex items-center gap-2"
+                                >
+                                    <RefreshCcw size={16} />
+                                    Re-analyze All
+                                </button>
+                            </div>
+                        )}
+
+                        {analysisStatus.status === 'completed' && analysisStatus.completed > 0 && (
+                            <div className="mt-3 text-sm text-green-400 flex items-center gap-2">
+                                <Check size={16} />
+                                Completed! Analyzed {analysisStatus.completed} tracks ({analysisStatus.errorCount} errors)
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -312,7 +527,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                                 usersList.map(u => (
                                     <div key={u.id} className="flex items-center justify-between p-3 bg-black/20 rounded-lg">
                                         <div className="flex items-center gap-3">
-                                            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center text-white text-xs font-bold">
+                                            <div className="w-8 h-8 rounded-full bg-app-accent flex items-center justify-center text-white text-xs font-bold">
                                                 {u.username.substring(0, 2).toUpperCase()}
                                             </div>
                                             <div>

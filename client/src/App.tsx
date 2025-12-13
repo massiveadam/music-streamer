@@ -5,6 +5,7 @@ import { audioEngine } from './audio/AudioEngine';
 import { NowPlaying } from './components/NowPlaying';
 import Sidebar from './components/Sidebar';
 import MiniPlayer from './components/MiniPlayer';
+import ProgressBanner from './components/ProgressBanner';
 import { HomePage, LibraryPage, PlaylistsPage, SettingsPage } from './pages';
 import { AlbumDetailModal, ArtistDetailModal, LabelDetailModal, CollectionDetailModal, PlaylistDetailModal } from './components/modals';
 import type { Track, Artist, Credit, Playlist, RepeatMode, ViewTab, AlbumSort, Theme, LibraryView } from './types';
@@ -20,6 +21,7 @@ interface Album {
   artist: string;
   tracks: Track[];
   year: number | null;
+  genre: string | null;
 }
 
 interface ScanStatus {
@@ -242,11 +244,15 @@ function MusicPlayer() {
     const groups: Record<string, Album> = {};
     tracks.forEach(track => {
       const key = track.album || 'Unknown Album';
-      if (!groups[key]) groups[key] = { name: key, artist: track.artist, tracks: [], year: track.year };
+      if (!groups[key]) groups[key] = { name: key, artist: track.artist, tracks: [], year: track.year, genre: track.genre || null };
       groups[key].tracks.push(track);
       // Use most recent year from tracks
       if (track.year && (!groups[key].year || track.year > groups[key].year)) {
         groups[key].year = track.year;
+      }
+      // Use first non-null genre found
+      if (track.genre && !groups[key].genre) {
+        groups[key].genre = track.genre;
       }
     });
     let sorted = Object.values(groups);
@@ -708,6 +714,9 @@ function MusicPlayer() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
+
+        {/* Progress Banner for enrichment/analysis */}
+        <ProgressBanner />
 
         {/* ===== HOME PAGE ===== */}
         {mainTab === 'home' && (
@@ -1534,6 +1543,15 @@ function MusicPlayer() {
               }}
               onTagClick={handleDeepLink}
               onToggleFavorite={toggleFavorite}
+              onAlbumClick={(clickedAlbum) => {
+                // Navigate to clicked album
+                const albumData = Array.isArray(albums)
+                  ? albums.find(a => a.name === clickedAlbum.name && a.artist === clickedAlbum.artist)
+                  : null;
+                if (albumData) {
+                  setSelectedAlbum({ ...albumData, tracks: tracks.filter(t => t.album === albumData.name && t.artist === albumData.artist) });
+                }
+              }}
             />
           )
         }

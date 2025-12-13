@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { X, Play, Disc, Plus, RefreshCcw, ListMusic, FolderHeart } from 'lucide-react';
 import axios from 'axios';
 import type { Track, Artist } from '../../types';
 import AddToPlaylistModal from './AddToPlaylistModal';
 import AddToCollectionModal from './AddToCollectionModal';
+import SimilarAlbumsSection from '../SimilarAlbumsSection';
+import { getTrackProfiles } from '../../utils/sonicProfiles';
 
 const SERVER_URL = 'http://localhost:3001';
 
@@ -34,6 +36,7 @@ interface AlbumDetailModalProps {
 
     onTagClick?: (tag: string) => void;
     onToggleFavorite?: (e: React.MouseEvent, trackId: number) => void;
+    onAlbumClick?: (album: { name: string; artist: string }) => void;
 }
 
 export default function AlbumDetailModal({
@@ -46,7 +49,7 @@ export default function AlbumDetailModal({
     onShowNowPlaying,
     onTagClick,
     onToggleFavorite,
-
+    onAlbumClick,
 }: AlbumDetailModalProps) {
     const [activeTab, setActiveTab] = useState<'tracks' | 'credits'>('tracks');
     const [albumMetadata, setAlbumMetadata] = useState<AlbumMetadata | null>(null);
@@ -59,6 +62,36 @@ export default function AlbumDetailModal({
     const [showCollectionModal, setShowCollectionModal] = useState(false);
     const [trackToAdd, setTrackToAdd] = useState<number | null>(null);
     const addMenuRef = useRef<HTMLDivElement>(null);
+
+    // Calculate Sonic Tags
+    const sonicTags = useMemo(() => {
+        if (!album.tracks.length) return [];
+
+        const tagCounts: Record<string, number> = {};
+        let validTracks = 0;
+
+        album.tracks.forEach(t => {
+            if (t.energy !== undefined && t.valence !== undefined) {
+                validTracks++;
+                const profiles = getTrackProfiles({
+                    energy: t.energy,
+                    valence: t.valence,
+                    danceability: t.danceability || 0,
+                    bpm: t.bpm || 0
+                });
+                profiles.forEach(p => tagCounts[p] = (tagCounts[p] || 0) + 1);
+            }
+        });
+
+        if (validTracks === 0) return [];
+
+        const threshold = Math.max(1, validTracks * 0.4);
+
+        return Object.entries(tagCounts)
+            .filter(([_, count]) => count >= threshold)
+            .map(([tag]) => tag)
+            .sort();
+    }, [album.tracks]);
 
     // Close dropdown when clicking outside
     useEffect(() => {
@@ -191,8 +224,34 @@ export default function AlbumDetailModal({
                         </button>
 
                         {/* Metadata Line */}
-                        <div className="flex flex-wrap gap-4 text-sm text-app-text-muted font-medium mb-4">
-                            <span>{album.genre || album.tracks[0]?.genre || 'Unknown Genre'}</span>
+                        <div className="flex flex-wrap gap-4 text-sm text-app-text-muted font-medium mb-4 items-center">
+                            <div className="flex flex-wrap gap-2">
+                                {/* Sonic Tags */}
+                                {sonicTags.map((tag, i) => (
+                                    <span
+                                        key={`sonic-${i}`}
+                                        onClick={() => onTagClick?.(tag)}
+                                        className={`cursor-pointer transition-colors ${onTagClick ? "hover:text-app-accent hover:underline" : ""} text-app-accent`}
+                                        title="Sonic Profile (from Audio Analysis)"
+                                    >
+                                        ✨ {tag}{(i < sonicTags.length - 1 || (album.genre || album.tracks[0]?.genre)) ? ',' : ''}
+                                    </span>
+                                ))}
+
+                                {/* Genre Tags */}
+                                {(album.genre || album.tracks[0]?.genre || 'Unknown Genre').split(/[,/]/).map((g, i, arr) => {
+                                    const genre = g.trim();
+                                    return (
+                                        <span
+                                            key={i}
+                                            onClick={() => onTagClick?.(genre)}
+                                            className={onTagClick ? "hover:text-app-accent hover:underline cursor-pointer transition-colors" : ""}
+                                        >
+                                            {genre}{i < (album.genre || album.tracks[0]?.genre || 'Unknown Genre').split(/[,/]/).length - 1 ? ',' : ''}
+                                        </span>
+                                    );
+                                })}
+                            </div>
                             {album.year && (
                                 <>
                                     <span>•</span>
@@ -432,6 +491,15 @@ export default function AlbumDetailModal({
                         </div>
                     )}
                 </div>
+
+                {/* Similar Albums Section */}
+                {onAlbumClick && (
+                    <SimilarAlbumsSection
+                        currentAlbum={album.name}
+                        currentArtist={album.artist}
+                        onAlbumClick={onAlbumClick}
+                    />
+                )}
             </div>
 
             {/* Add to Playlist Modal */}

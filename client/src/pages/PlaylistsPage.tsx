@@ -1,5 +1,7 @@
-import { ListMusic, Disc, Plus } from 'lucide-react';
+import { useState } from 'react';
+import { ListMusic, Disc, Plus, Wand2 } from 'lucide-react';
 import type { Playlist } from '../types';
+import { GeneratePlaylistModal } from '../components/modals';
 
 const SERVER_URL = 'http://localhost:3001';
 
@@ -13,6 +15,7 @@ interface PlaylistsPageProps {
     setEditingPlaylist: (playlist: Playlist | null) => void;
     setShowPlaylistModal: (show: boolean) => void;
     setAddToCollectionAlbum: (album: { name: string; artist: string } | null) => void;
+    onPlaylistsChange?: () => void;
 }
 
 export default function PlaylistsPage({
@@ -25,7 +28,10 @@ export default function PlaylistsPage({
     setEditingPlaylist,
     setShowPlaylistModal,
     setAddToCollectionAlbum,
+    onPlaylistsChange,
 }: PlaylistsPageProps) {
+    const [showGenerateModal, setShowGenerateModal] = useState(false);
+
     return (
         <div className="flex-1 overflow-y-auto p-8 bg-app-bg">
             <div className="max-w-7xl mx-auto">
@@ -47,21 +53,43 @@ export default function PlaylistsPage({
                         </button>
                     </div>
 
-                    <button
-                        onClick={() => {
-                            if (playlistsViewMode === 'playlists') {
-                                setEditingPlaylist({ id: 0, name: '', description: '' } as Playlist);
-                                setShowPlaylistModal(true);
-                            } else {
-                                setAddToCollectionAlbum({ name: '', artist: '' });
-                            }
-                        }}
-                        className="px-4 py-2 bg-app-accent hover:bg-app-accent/80 rounded-lg text-white font-bold transition-colors flex items-center gap-2"
-                    >
-                        <Plus size={20} />
-                        {playlistsViewMode === 'playlists' ? 'New Playlist' : 'New Collection'}
-                    </button>
+                    <div className="flex items-center gap-3">
+                        {playlistsViewMode === 'playlists' && (
+                            <button
+                                onClick={() => setShowGenerateModal(true)}
+                                className="px-4 py-2 bg-app-accent hover:bg-app-accent/80 rounded-lg text-white font-bold transition-all flex items-center gap-2"
+                            >
+                                <Wand2 size={18} />
+                                Generate Smart Playlist
+                            </button>
+                        )}
+                        <button
+                            onClick={() => {
+                                if (playlistsViewMode === 'playlists') {
+                                    setEditingPlaylist({ id: 0, name: '', description: '' } as Playlist);
+                                    setShowPlaylistModal(true);
+                                } else {
+                                    setAddToCollectionAlbum({ name: '', artist: '' });
+                                }
+                            }}
+                            className="px-4 py-2 bg-app-accent hover:bg-app-accent/80 rounded-lg text-white font-bold transition-colors flex items-center gap-2"
+                        >
+                            <Plus size={20} />
+                            {playlistsViewMode === 'playlists' ? 'New Playlist' : 'New Collection'}
+                        </button>
+                    </div>
                 </div>
+
+                {/* Generate Playlist Modal */}
+                {showGenerateModal && (
+                    <GeneratePlaylistModal
+                        onClose={() => setShowGenerateModal(false)}
+                        onSuccess={() => {
+                            setShowGenerateModal(false);
+                            onPlaylistsChange?.();
+                        }}
+                    />
+                )}
 
                 {/* Playlists Grid */}
                 {playlistsViewMode === 'playlists' && (

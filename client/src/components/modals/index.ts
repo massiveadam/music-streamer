@@ -6,3 +6,4 @@ export { default as CollectionDetailModal } from './CollectionDetailModal';
 export { default as AddToPlaylistModal } from './AddToPlaylistModal';
 export { default as AddToCollectionModal } from './AddToCollectionModal';
 export { default as PlaylistDetailModal } from './PlaylistDetailModal';
+export { default as GeneratePlaylistModal } from './GeneratePlaylistModal';

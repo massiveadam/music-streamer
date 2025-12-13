@@ -92,6 +92,11 @@ addColumn('tracks', 'genre', 'TEXT');
 addColumn('tracks', 'rating', 'INTEGER');
 addColumn('tracks', 'has_art', 'INTEGER');
 addColumn('tracks', 'mood', 'TEXT');
+// Audio analysis columns
+addColumn('tracks', 'energy', 'REAL');
+addColumn('tracks', 'danceability', 'REAL');
+addColumn('tracks', 'valence', 'REAL');
+addColumn('tracks', 'analyzed_at', 'TEXT');
 
 // MusicBrainz columns for tracks
 addColumn('tracks', 'mbid', 'TEXT');
@@ -223,6 +228,10 @@ try {
   `);
 
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_tags_unique ON entity_tags(entity_type, entity_id, tag_id)`);
+
+  // Optimize Credits Search
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_role ON credits(role)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_name ON credits(name)`);
 } catch (e) { /* Index or dedup might fail on empty table */ }
 
 // Playlists table
@@ -336,6 +345,83 @@ export const getSetting = (key: string): string | undefined => {
 export const setSetting = (key: string, value: string): void => {
   db.prepare('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)').run(key, value);
 };
+
+// ===== SMART MIXES (Curation) =====
+db.exec(`
+  CREATE TABLE IF NOT EXISTS smart_mixes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    icon TEXT,
+    filter_rules TEXT NOT NULL,
+    sort_order INTEGER,
+    is_system INTEGER DEFAULT 1,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+// Seed default smart mixes if none exist
+const mixCount = db.prepare('SELECT COUNT(*) as count FROM smart_mixes').get() as { count: number };
+if (mixCount.count === 0) {
+  const defaultMixes = [
+    {
+      name: 'Chill Vibes',
+      description: 'Slow tempos and mellow moods',
+      icon: 'Coffee',
+      filter_rules: JSON.stringify({ bpm: { max: 100 }, mood: ['chill', 'mellow', 'calm', 'relaxed'] }),
+      sort_order: 1
+    },
+    {
+      name: 'High Energy',
+      description: 'Fast beats to keep you moving',
+      icon: 'Zap',
+      filter_rules: JSON.stringify({ bpm: { min: 120 } }),
+      sort_order: 2
+    },
+    {
+      name: 'Recently Loved',
+      description: 'Your favorite tracks',
+      icon: 'Heart',
+      filter_rules: JSON.stringify({ rating: { min: 5 } }),
+      sort_order: 3
+    },
+    {
+      name: 'Fresh Finds',
+      description: 'Added in the last 7 days',
+      icon: 'Sparkles',
+      filter_rules: JSON.stringify({ recentlyAdded: 7 }),
+      sort_order: 4
+    },
+    {
+      name: 'Electronic',
+      description: 'Electronic and dance music',
+      icon: 'Radio',
+      filter_rules: JSON.stringify({ genre: ['electronic', 'edm', 'house', 'techno', 'trance'] }),
+      sort_order: 5
+    }
+  ];
+
+  const insertMix = db.prepare(`
+    INSERT INTO smart_mixes (name, description, icon, filter_rules, sort_order, is_system)
+    VALUES (?, ?, ?, ?, ?, 1)
+  `);
+
+  for (const mix of defaultMixes) {
+    insertMix.run(mix.name, mix.description, mix.icon, mix.filter_rules, mix.sort_order);
+  }
+  console.log('Seeded default smart mixes');
+}
+
+// ===== TRACK EMBEDDINGS (ML Foundation) =====
+db.exec(`
+  CREATE TABLE IF NOT EXISTS track_embeddings (
+    track_id INTEGER PRIMARY KEY,
+    embedding BLOB,
+    embedding_version TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+  )
+`);
 
 // Export typed database instance
 export default db;

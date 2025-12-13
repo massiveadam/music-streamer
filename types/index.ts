@@ -24,6 +24,9 @@ export interface Track {
     release_mbid?: string;
     enriched?: number;
     added_at?: string;
+    energy?: number;
+    valence?: number;
+    danceability?: number;
 }
 
 export interface Artist {

@@ -7,6 +7,7 @@ import { MusicBrainzApi } from 'musicbrainz-api';
 import db from './db';
 import type { Track, Artist as ArtistType, Release, Credit, Label } from '../types';
 import * as lastfm from './lastfm';
+import * as discogs from './discogs';
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -117,7 +118,79 @@ async function rateLimitedRequest<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Clean up search terms by removing parenthetical suffixes, edition info, etc.
+ * Beets-style cleaning for better MusicBrainz matching
+ */
+function cleanSearchTerm(term: string): string {
+    return term
+        // Remove slash-separated editions: (Remastered 2003/Rudy Van Gelder Edition)
+        .replace(/\s*\([^)]*\/[^)]*\)/gi, '')
+        // Remove common parenthetical suffixes
+        .replace(/\s*\(\d{4}\s*Remaster(ed)?\)/gi, '')
+        .replace(/\s*\(Remaster(ed)?\s*\d{0,4}\)/gi, '')
+        .replace(/\s*\(Album Version\)/gi, '')
+        .replace(/\s*\(Mono|Stereo\)/gi, '')
+        .replace(/\s*\(Single Version\)/gi, '')
+        .replace(/\s*\(Radio Edit\)/gi, '')
+        .replace(/\s*\(Extended.*?\)/gi, '')
+        .replace(/\s*\(Original.*?\)/gi, '')
+        .replace(/\s*\(Live.*?\)/gi, '')
+        .replace(/\s*\(Deluxe.*?\)/gi, '')
+        .replace(/\s*\(Bonus.*?\)/gi, '')
+        .replace(/\s*\(Anniversary.*?\)/gi, '')
+        .replace(/\s*\(feat\..*?\)/gi, '')
+        .replace(/\s*\(ft\..*?\)/gi, '')
+        .replace(/\s*\(with .*?\)/gi, '')
+        // Remove trailing formats
+        .replace(/\s*-\s*Remaster(ed)?$/gi, '')
+        .replace(/\s*-\s*\d{4}\s*Remaster(ed)?$/gi, '')
+        .replace(/\s*-\s*\d{4}\s*Digital Remaster$/gi, '')
+        // Remove bracketed location/date: [London 03.06.17]
+        .replace(/\s*\[[^\]]*\d{2}\.\d{2}\.\d{2,4}[^\]]*\]/gi, '')
+        .replace(/\s*\[.*?\]/gi, '')
+        // Remove trailing year
+        .replace(/\s+\d{4}$/, '')
+        .trim();
+}
+
+/**
+ * Normalize artist name for fuzzy matching
+ */
+function normalizeArtist(artist: string): string {
+    return artist
+        .toLowerCase()
+        .replace(/^the\s+/i, '')
+        .replace(/['']/g, "'")
+        .replace(/[&]/g, 'and')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * Calculate string similarity (0-1) using Dice coefficient
+ */
+function calculateStringSimilarity(str1: string, str2: string): number {
+    const s1 = str1.toLowerCase();
+    const s2 = str2.toLowerCase();
+    if (s1 === s2) return 1.0;
+    if (s1.length < 2 || s2.length < 2) return 0;
+
+    const getBigrams = (s: string) => {
+        const bigrams = new Set<string>();
+        for (let i = 0; i < s.length - 1; i++) bigrams.add(s.substring(i, i + 2));
+        return bigrams;
+    };
+
+    const bigrams1 = getBigrams(s1);
+    const bigrams2 = getBigrams(s2);
+    let intersection = 0;
+    for (const bg of bigrams1) if (bigrams2.has(bg)) intersection++;
+    return (2 * intersection) / (bigrams1.size + bigrams2.size);
+}
+
+/**
  * Search MusicBrainz for a recording by metadata
+ * Uses fuzzy matching and multiple search strategies
  */
 export async function searchRecording(
     artist: string,
@@ -125,12 +198,49 @@ export async function searchRecording(
     album?: string
 ): Promise<MBRecording | null> {
     try {
-        const query = `recording:"${title}" AND artist:"${artist}"${album ? ` AND release:"${album}"` : ''}`;
-        const result = await mbApi.search('recording', { query, limit: 5 });
+        const cleanTitle = cleanSearchTerm(title);
+        const cleanAlbum = album ? cleanSearchTerm(album) : undefined;
+        const normalizedArtist = normalizeArtist(artist);
 
+        // Strategy 1: Cleaned search with album, score results
+        let query = `recording:"${cleanTitle}" AND artist:"${artist}"${cleanAlbum ? ` AND release:"${cleanAlbum}"` : ''}`;
+        let result = await mbApi.search('recording', { query, limit: 10 });
+
+        if (result.recordings && result.recordings.length > 0) {
+            const recordings = result.recordings as unknown as MBRecording[];
+            let bestMatch: MBRecording | null = null;
+            let bestScore = 0;
+
+            for (const rec of recordings) {
+                const titleSim = calculateStringSimilarity(cleanTitle, rec.title);
+                const artistSim = rec['artist-credit']?.[0]?.artist
+                    ? calculateStringSimilarity(normalizedArtist, normalizeArtist(rec['artist-credit'][0].artist.name))
+                    : 0;
+                const score = (titleSim * 0.6) + (artistSim * 0.4);
+                if (score > bestScore && score > 0.6) {
+                    bestScore = score;
+                    bestMatch = rec;
+                }
+            }
+            if (bestMatch) return bestMatch;
+        }
+
+        // Strategy 2: Without album filter
+        if (cleanAlbum) {
+            query = `recording:"${cleanTitle}" AND artist:"${artist}"`;
+            result = await mbApi.search('recording', { query, limit: 10 });
+            if (result.recordings && result.recordings.length > 0) {
+                return result.recordings[0] as unknown as MBRecording;
+            }
+        }
+
+        // Strategy 3: Fuzzy search without quotes
+        query = `recording:${cleanTitle.replace(/['"]/g, '')} AND artist:${artist.replace(/['"]/g, '')}`;
+        result = await mbApi.search('recording', { query, limit: 5 });
         if (result.recordings && result.recordings.length > 0) {
             return result.recordings[0] as unknown as MBRecording;
         }
+
         return null;
     } catch (err) {
         console.error(`MusicBrainz search error for "${title}":`, (err as Error).message);
@@ -465,9 +575,45 @@ async function fetchAndStoreCoverArt(mbid: string): Promise<void> {
  * Enrich a single track with MusicBrainz data
  */
 export async function enrichTrack(track: Track): Promise<{ success: boolean; mbid?: string; reason?: string }> {
-    // 1. FETCH PHASE
+    // 1. FETCH PHASE - Try MusicBrainz first
     const recording = await searchRecording(track.artist, track.title, track.album);
-    if (!recording) return { success: false, reason: 'No match found' };
+
+    // If MusicBrainz fails, try Discogs as fallback
+    if (!recording) {
+        if (track.album) {
+            try {
+                const discogsData = await discogs.getAlbumMetadata(track.artist, track.album);
+                if (discogsData && discogsData.found && (discogsData.genres.length > 0 || discogsData.styles.length > 0)) {
+                    // Store Discogs metadata
+                    const genre = discogsData.genres[0] || null;
+                    const styles = discogsData.styles.slice(0, 3).join(', ') || null; // Descriptors
+
+                    db.prepare(`
+                        UPDATE tracks SET
+                            genre = COALESCE(genre, ?),
+                            mood = COALESCE(mood, ?),
+                            year = COALESCE(year, ?),
+                            enriched = 1
+                        WHERE id = ?
+                    `).run(genre, styles, discogsData.year, track.id);
+
+                    // Store styles as tags (like RYM descriptors)
+                    if (discogsData.styles.length > 0) {
+                        const storeTag = db.prepare('INSERT OR IGNORE INTO entity_tags (entity_type, entity_id, tag, source) VALUES (?, ?, ?, ?)');
+                        for (const style of discogsData.styles) {
+                            storeTag.run('track', track.id, style.toLowerCase(), 'discogs');
+                        }
+                    }
+
+                    console.log(`[Discogs] Enriched: ${track.artist} - ${track.title} (genres: ${discogsData.genres.join(', ')})`);
+                    return { success: true, reason: 'Discogs fallback' };
+                }
+            } catch (e) {
+                console.error(`Discogs fallback error for ${track.title}:`, (e as Error).message);
+            }
+        }
+        return { success: false, reason: 'No match found (MB + Discogs)' };
+    }
 
     const details = await getRecordingDetails(recording.id);
     if (!details) return { success: false, reason: 'Failed to fetch details' };
@@ -507,7 +653,24 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
 
     // 2. WRITE PHASE (Transaction)
     const txn = db.transaction(() => {
-        db.prepare('UPDATE tracks SET mbid = ?, enriched = 1 WHERE id = ?').run(recording.id, track.id);
+        // Compute genre from tags (use first tag as primary genre)
+        const allTags = [
+            ...(details.tags || []),
+            ...(releaseFull?.tags || []),
+            ...(artistFull?.tags || []),
+            ...lfmAlbumTags,
+            ...lfmArtistTags
+        ];
+        const genreTag = allTags.find(t => t.name && t.name.length > 0)?.name || null;
+
+        // Update track with mbid, enriched flag, and genre
+        db.prepare(`
+            UPDATE tracks SET 
+                mbid = ?, 
+                enriched = 1,
+                genre = COALESCE(genre, ?)
+            WHERE id = ?
+        `).run(recording.id, genreTag, track.id);
 
         if (details.relations) storeCredits(track.id, details.relations);
         if (details.tags) storeEntityTags('track', track.id, details.tags);
@@ -665,12 +828,23 @@ export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ e
             enrichmentStatus.currentTrack = `Album: ${artist} - ${album} (${albumTracks.length} tracks)`;
 
             try {
-                // Use rate limiter for the initial search
-                const recording = await rateLimitedRequest(() =>
-                    searchRecording(artist, albumTracks[0].title, album)
-                );
+                // OPTIMIZATION: Start Last.fm in parallel (name-based)
+                const lfmArtistPromise = lastfm.getArtistInfo(artist as string).catch(() => null);
+                const lfmAlbumPromise = lastfm.getAlbumInfo(artist as string, album as string).catch(() => null);
 
-                if (!recording) {
+                let recordingId: string | null = null;
+
+                // SHORTCUT: Use embedded MBID if available (skips search)
+                if (albumTracks[0].mbid) {
+                    recordingId = albumTracks[0].mbid;
+                } else {
+                    const searchResult = await rateLimitedRequest(() =>
+                        searchRecording(artist, albumTracks[0].title, album)
+                    );
+                    if (searchResult) recordingId = searchResult.id;
+                }
+
+                if (!recordingId) {
                     // Mark all tracks in album as enriched with no data
                     for (const track of albumTracks) {
                         db.prepare('UPDATE tracks SET enriched = 1 WHERE id = ?').run(track.id);
@@ -684,8 +858,8 @@ export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ e
                     continue;
                 }
 
-                // Get recording details
-                const details = await rateLimitedRequest(() => getRecordingDetails(recording.id));
+                // Get recording details (Credits, Relations)
+                const details = await rateLimitedRequest(() => getRecordingDetails(recordingId!));
                 if (!details) {
                     for (const track of albumTracks) {
                         db.prepare('UPDATE tracks SET enriched = 1 WHERE id = ?').run(track.id);
@@ -701,7 +875,20 @@ export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ e
 
                 // Find matching release
                 let releaseFull: MBRelease | null = null;
-                if (album && details.releases && details.releases.length > 0) {
+
+                // SHORTCUT: Use embedded Release MBID
+                if (albumTracks[0].release_mbid) {
+                    const rId = albumTracks[0].release_mbid;
+                    if (releaseCache.has(rId)) {
+                        releaseFull = releaseCache.get(rId)!;
+                    } else {
+                        releaseFull = await rateLimitedRequest(() => getReleaseDetails(rId));
+                        if (releaseFull) releaseCache.set(rId, releaseFull);
+                    }
+                }
+
+                // Fallback: Match release from recording details
+                if (!releaseFull && album && details.releases && details.releases.length > 0) {
                     const matchedRelease = details.releases.find(r =>
                         r.title.toLowerCase() === album.toLowerCase()
                     ) || details.releases[0];
@@ -729,15 +916,24 @@ export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ e
                     }
                 }
 
-                // Get Last.fm data once for the album
-                let lfmDescription: string | null = null;
-                if (album) {
-                    try {
-                        lfmDescription = await lastfm.getAlbumInfo(artist, album);
-                    } catch (e) { }
+                // Await Last.fm Parallel Requests
+                let lfmArtistBio: { bio: string, image: string } | null = null;
+                const lfmInfo = await lfmArtistPromise;
+                if (lfmInfo && (lfmInfo.description || lfmInfo.image)) {
+                    lfmArtistBio = { bio: lfmInfo.description, image: lfmInfo.image };
                 }
 
+                let lfmDescription: string | null = await lfmAlbumPromise;
+
                 // Apply enrichment to all tracks in the album
+                // Compute genre from tags
+                const allTags = [
+                    ...(details.tags || []),
+                    ...(releaseFull?.tags || []),
+                    ...(artistFull?.tags || [])
+                ];
+                const genreTag = allTags.find(t => t.name && t.name.length > 0)?.name || null;
+
                 const txn = db.transaction(() => {
                     // Store release once
                     if (releaseFull) {
@@ -747,13 +943,29 @@ export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ e
 
                     // Store artist once
                     if (artistFull) {
-                        upsertArtist(artistFull);
+                        const artistId = upsertArtist(artistFull);
+
+                        // Update bio if found and missing
+                        if (artistId && lfmArtistBio) {
+                            db.prepare(`
+                                UPDATE artists 
+                                SET description = COALESCE(description, ?), 
+                                    image_path = COALESCE(image_path, ?)
+                                WHERE id = ?
+                            `).run(lfmArtistBio.bio, lfmArtistBio.image, artistId);
+                        }
                     }
 
-                    // Update all tracks in this album
+                    // Update all tracks in this album with genre
                     for (const track of albumTracks) {
-                        db.prepare('UPDATE tracks SET mbid = ?, enriched = 1, release_mbid = ? WHERE id = ?')
-                            .run(recording.id, releaseFull?.id || null, track.id);
+                        db.prepare(`
+                            UPDATE tracks SET 
+                                mbid = ?, 
+                                enriched = 1, 
+                                release_mbid = ?,
+                                genre = COALESCE(genre, ?)
+                            WHERE id = ?
+                        `).run(recordingId!, releaseFull?.id || null, genreTag, track.id);
 
                         if (details.relations) storeCredits(track.id, details.relations);
                     }

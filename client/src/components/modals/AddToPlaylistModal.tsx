@@ -202,7 +202,7 @@ export default function AddToPlaylistModal({
                                     disabled={isAdding !== null}
                                     className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-app-surface rounded-lg transition-colors disabled:opacity-50"
                                 >
-                                    <div className="w-12 h-12 bg-gradient-to-br from-purple-500/30 to-blue-500/30 rounded-lg flex items-center justify-center">
+                                    <div className="w-12 h-12 bg-app-surface rounded-lg flex items-center justify-center">
                                         <Music size={20} className="text-app-text-muted" />
                                     </div>
                                     <div className="flex-1 text-left">

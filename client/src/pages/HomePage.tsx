@@ -1,8 +1,19 @@
-import { useMemo, useCallback, memo } from 'react';
-import { Disc, Clock, Sparkles, ListMusic, Hash, Plus } from 'lucide-react';
+import { useMemo, useCallback, memo, useState, useEffect } from 'react';
+import { Disc, Clock, Sparkles, ListMusic, Hash, Plus, Wand2 } from 'lucide-react';
+import axios from 'axios';
 import type { Track, Artist } from '../types';
+import SmartMixCard from '../components/SmartMixCard';
+import SmartMixModal from '../components/SmartMixModal';
 
 const SERVER_URL = 'http://localhost:3001';
+
+interface SmartMix {
+    id: number;
+    name: string;
+    description: string;
+    icon: string;
+    filter_rules: string;
+}
 
 interface Album {
     name: string;
@@ -192,6 +203,17 @@ function HomePage({
     setPlaylistsViewMode,
     setAddToCollectionAlbum,
 }: HomePageProps) {
+    // Smart Mixes state
+    const [smartMixes, setSmartMixes] = useState<SmartMix[]>([]);
+    const [selectedMix, setSelectedMix] = useState<SmartMix | null>(null);
+
+    // Fetch smart mixes on mount
+    useEffect(() => {
+        axios.get(`${SERVER_URL}/api/mixes`)
+            .then(res => setSmartMixes(res.data || []))
+            .catch(err => console.error('Failed to fetch smart mixes:', err));
+    }, []);
+
     // Memoize expensive filtering operations
     const uniqueRecentlyPlayed = useMemo(() => {
         return recentlyPlayed
@@ -227,132 +249,163 @@ function HomePage({
     }, [setMainTab, setPlaylistsViewMode, setAddToCollectionAlbum]);
 
     return (
-        <div className="flex-1 overflow-y-auto p-8 bg-app-bg">
-            <div className="max-w-7xl mx-auto">
-                <header className="mb-12">
-                    <h1 className="text-4xl font-serif font-bold text-app-text">
-                        Welcome Back
-                    </h1>
-                </header>
+        <>
+            <div className="flex-1 overflow-y-auto p-8 bg-app-bg">
+                <div className="max-w-7xl mx-auto">
+                    <header className="mb-12">
+                        <h1 className="text-4xl font-serif font-bold text-app-text">
+                            Welcome Back
+                        </h1>
+                    </header>
 
-                {/* 1. Recently Played Albums (Largest) */}
-                {uniqueRecentlyPlayed.length > 0 && (
-                    <div className="mb-16">
-                        <h2 className="text-2xl font-bold text-app-text mb-6 flex items-center gap-2">
-                            <Disc size={24} className="text-app-accent" />
-                            Jump Back In
-                        </h2>
-                        <div className="flex gap-6 overflow-x-auto pb-4 no-scrollbar">
-                            {uniqueRecentlyPlayed.map((track, i) => (
-                                <AlbumCard
-                                    key={`${track.album}-${i}`}
-                                    track={track}
-                                    albums={albums}
-                                    setSelectedAlbum={setSelectedAlbum}
-                                    size="large"
-                                />
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* 2. Recently Added Albums */}
-                {uniqueRecentlyAdded.length > 0 && (
-                    <div className="mb-16">
-                        <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
-                            <Clock size={20} className="text-app-accent" />
-                            Fresh Arrivals
-                        </h2>
-                        <div className="flex gap-5 overflow-x-auto pb-4 no-scrollbar">
-                            {uniqueRecentlyAdded.map((track) => (
-                                <AlbumCard
-                                    key={track.id}
-                                    track={track}
-                                    albums={albums}
-                                    setSelectedAlbum={setSelectedAlbum}
-                                    size="small"
-                                />
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* 3. Pinned Collections */}
-                <div className="mb-16">
-                    <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
-                        <Sparkles size={20} className="text-app-accent" />
-                        Collections
-                    </h2>
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-                        {pinnedCollections.map(col => (
-                            <CollectionCard
-                                key={col.id}
-                                collection={col}
-                                onClick={() => setSelectedCollection(col)}
-                            />
-                        ))}
-
-                        {/* Add Collection Button */}
-                        <div
-                            className="bg-app-surface/30 hover:bg-app-surface border-2 border-dashed border-app-surface hover:border-app-text-muted rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition-all group min-h-[200px]"
-                            onClick={handleNewCollection}
-                        >
-                            <div className="w-12 h-12 rounded-full bg-app-surface group-hover:bg-app-accent/20 flex items-center justify-center mb-3 transition-colors">
-                                <Plus size={24} className="text-app-text-muted group-hover:text-app-accent" />
+                    {/* Smart Mixes - Curated For You */}
+                    {smartMixes.length > 0 && (
+                        <div className="mb-16">
+                            <h2 className="text-2xl font-bold text-app-text mb-6 flex items-center gap-2">
+                                <Wand2 size={24} className="text-app-accent" />
+                                Curated For You
+                            </h2>
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                                {smartMixes.map(mix => (
+                                    <SmartMixCard
+                                        key={mix.id}
+                                        mix={mix}
+                                        onClick={() => setSelectedMix(mix)}
+                                    />
+                                ))}
                             </div>
-                            <span className="font-bold text-app-text">New Collection</span>
                         </div>
-                    </div>
-                </div>
+                    )}
 
-                {/* 4. Listening History */}
-                {historyTracks.length > 0 && (
+                    {/* 1. Recently Played Albums (Largest) */}
+                    {uniqueRecentlyPlayed.length > 0 && (
+                        <div className="mb-16">
+                            <h2 className="text-2xl font-bold text-app-text mb-6 flex items-center gap-2">
+                                <Disc size={24} className="text-app-accent" />
+                                Jump Back In
+                            </h2>
+                            <div className="flex gap-6 overflow-x-auto pb-4 no-scrollbar">
+                                {uniqueRecentlyPlayed.map((track, i) => (
+                                    <AlbumCard
+                                        key={`${track.album}-${i}`}
+                                        track={track}
+                                        albums={albums}
+                                        setSelectedAlbum={setSelectedAlbum}
+                                        size="large"
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 2. Recently Added Albums */}
+                    {uniqueRecentlyAdded.length > 0 && (
+                        <div className="mb-16">
+                            <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
+                                <Clock size={20} className="text-app-accent" />
+                                Fresh Arrivals
+                            </h2>
+                            <div className="flex gap-5 overflow-x-auto pb-4 no-scrollbar">
+                                {uniqueRecentlyAdded.map((track) => (
+                                    <AlbumCard
+                                        key={track.id}
+                                        track={track}
+                                        albums={albums}
+                                        setSelectedAlbum={setSelectedAlbum}
+                                        size="small"
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 3. Pinned Collections */}
                     <div className="mb-16">
                         <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
-                            <ListMusic size={20} className="text-app-accent" />
-                            Listening History
+                            <Sparkles size={20} className="text-app-accent" />
+                            Collections
                         </h2>
-                        <div className="bg-app-surface/50 rounded-2xl p-4">
-                            {historyTracks.map((track, i) => (
-                                <HistoryTrackRow
-                                    key={`${track.id}-${i}`}
-                                    track={track}
-                                    index={i}
-                                    tracks={tracks}
-                                    playTrack={playTrack}
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                            {pinnedCollections.map(col => (
+                                <CollectionCard
+                                    key={col.id}
+                                    collection={col}
+                                    onClick={() => setSelectedCollection(col)}
                                 />
                             ))}
+
+                            {/* Add Collection Button */}
+                            <div
+                                className="bg-app-surface/30 hover:bg-app-surface border-2 border-dashed border-app-surface hover:border-app-text-muted rounded-xl p-4 flex flex-col items-center justify-center cursor-pointer transition-all group min-h-[200px]"
+                                onClick={handleNewCollection}
+                            >
+                                <div className="w-12 h-12 rounded-full bg-app-surface group-hover:bg-app-accent/20 flex items-center justify-center mb-3 transition-colors">
+                                    <Plus size={24} className="text-app-text-muted group-hover:text-app-accent" />
+                                </div>
+                                <span className="font-bold text-app-text">New Collection</span>
+                            </div>
                         </div>
                     </div>
-                )}
 
-                {/* 5. Database Stats */}
-                <div className="mb-12 border-t border-white/10 pt-8">
-                    <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
-                        <Hash size={20} className="text-app-accent" />
-                        Database Stats
-                    </h2>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                        <div className="bg-app-surface/40 rounded-xl p-6">
-                            <div className="text-3xl font-bold text-white mb-1">{stats.trackCount.toLocaleString()}</div>
-                            <div className="text-sm text-app-text-muted uppercase tracking-wider">Tracks</div>
+                    {/* 4. Listening History */}
+                    {historyTracks.length > 0 && (
+                        <div className="mb-16">
+                            <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
+                                <ListMusic size={20} className="text-app-accent" />
+                                Listening History
+                            </h2>
+                            <div className="bg-app-surface/50 rounded-2xl p-4">
+                                {historyTracks.map((track, i) => (
+                                    <HistoryTrackRow
+                                        key={`${track.id}-${i}`}
+                                        track={track}
+                                        index={i}
+                                        tracks={tracks}
+                                        playTrack={playTrack}
+                                    />
+                                ))}
+                            </div>
                         </div>
-                        <div className="bg-app-surface/40 rounded-xl p-6">
-                            <div className="text-3xl font-bold text-white mb-1">{stats.albumCount.toLocaleString()}</div>
-                            <div className="text-sm text-app-text-muted uppercase tracking-wider">Albums</div>
-                        </div>
-                        <div className="bg-app-surface/40 rounded-xl p-6">
-                            <div className="text-3xl font-bold text-white mb-1">{stats.artistCount.toLocaleString()}</div>
-                            <div className="text-sm text-app-text-muted uppercase tracking-wider">Artists</div>
-                        </div>
-                        <div className="bg-app-surface/40 rounded-xl p-6">
-                            <div className="text-3xl font-bold text-white mb-1">{stats.hoursOfMusic.toLocaleString()}</div>
-                            <div className="text-sm text-app-text-muted uppercase tracking-wider">Hours of Music</div>
+                    )}
+
+                    {/* 5. Database Stats */}
+                    <div className="mb-12 border-t border-white/10 pt-8">
+                        <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
+                            <Hash size={20} className="text-app-accent" />
+                            Database Stats
+                        </h2>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                            <div className="bg-app-surface/40 rounded-xl p-6">
+                                <div className="text-3xl font-bold text-white mb-1">{stats.trackCount.toLocaleString()}</div>
+                                <div className="text-sm text-app-text-muted uppercase tracking-wider">Tracks</div>
+                            </div>
+                            <div className="bg-app-surface/40 rounded-xl p-6">
+                                <div className="text-3xl font-bold text-white mb-1">{stats.albumCount.toLocaleString()}</div>
+                                <div className="text-sm text-app-text-muted uppercase tracking-wider">Albums</div>
+                            </div>
+                            <div className="bg-app-surface/40 rounded-xl p-6">
+                                <div className="text-3xl font-bold text-white mb-1">{stats.artistCount.toLocaleString()}</div>
+                                <div className="text-sm text-app-text-muted uppercase tracking-wider">Artists</div>
+                            </div>
+                            <div className="bg-app-surface/40 rounded-xl p-6">
+                                <div className="text-3xl font-bold text-white mb-1">{stats.hoursOfMusic.toLocaleString()}</div>
+                                <div className="text-sm text-app-text-muted uppercase tracking-wider">Hours of Music</div>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
-        </div>
+
+            {/* Smart Mix Modal */}
+            {selectedMix && (
+                <SmartMixModal
+                    mix={selectedMix}
+                    allTracks={tracks}
+                    onClose={() => setSelectedMix(null)}
+                    onPlayTrack={playTrack}
+                />
+            )}
+        </>
     );
 }
 
