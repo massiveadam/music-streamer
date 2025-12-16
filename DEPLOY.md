@@ -86,7 +86,7 @@ git push origin main
 
 Check **Actions** tab in your GitHub repo to watch the build. It will:
 1. Build the Docker image
-2. Push to `cowmilk69/openstream:latest` on Docker Hub
+2. Push to `cowmilk69/openstreamer:latest` on Docker Hub
 
 ---
 
@@ -107,7 +107,7 @@ mkdir -p /mnt/user/appdata/openstream
 cd /mnt/user/appdata/openstream
 
 # Download the compose file (or create it manually)
-wget https://raw.githubusercontent.com/cowmilk69/openstream/main/docker-compose.unraid.yml -O docker-compose.yml
+wget https://raw.githubusercontent.com/cowmilk69/openstreamer/main/docker-compose.unraid.yml -O docker-compose.yml
 ```
 
 Edit the file with your settings:
@@ -139,7 +139,7 @@ docker-compose up -d
 | Setting | Value |
 |---------|-------|
 | **Name** | openstream |
-| **Repository** | `cowmilk69/openstream:latest` |
+| **Repository** | `cowmilk69/openstreamer:latest` |
 | **Network** | Bridge |
 | **Port** | Host `3001` → Container `3001` |
 
@@ -303,7 +303,7 @@ chmod -R 777 /mnt/user/appdata/openstream
 
 ### Force pull latest image
 ```bash
-docker pull cowmilk69/openstream:latest
+docker pull cowmilk69/openstreamer:latest
 docker-compose up -d
 ```
 

@@ -4,7 +4,7 @@
 services:
   openstream:
     # Pull from Docker Hub
-    image: cowmilk69/openstream:latest
+    image: cowmilk69/openstreamer:latest
     container_name: openstream
     restart: always  # Start on boot, restart on crash
     ports:
