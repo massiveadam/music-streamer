@@ -1,9 +1,9 @@
+import { SERVER_URL, getServerUrl } from '../config';
 import { useState, useEffect, memo, useCallback } from 'react';
 import { X, Play, Shuffle, Disc } from 'lucide-react';
 import axios from 'axios';
 import type { Track } from '../types';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface SmartMix {
     id: number;
@@ -27,7 +27,7 @@ function SmartMixModal({ mix, allTracks, onClose, onPlayTrack }: SmartMixModalPr
         const fetchTracks = async () => {
             setIsLoading(true);
             try {
-                const res = await axios.get(`${SERVER_URL}/api/mixes/${mix.id}/tracks?limit=50`);
+                const res = await axios.get(`${getServerUrl()}/api/mixes/${mix.id}/tracks?limit=50`);
                 setTracks(res.data || []);
             } catch (e) {
                 console.error('Failed to fetch mix tracks:', e);
@@ -137,7 +137,7 @@ function SmartMixModal({ mix, allTracks, onClose, onPlayTrack }: SmartMixModalPr
                                 <div className="w-12 h-12 rounded-lg bg-app-surface overflow-hidden shrink-0">
                                     {track.has_art ? (
                                         <img
-                                            src={`${SERVER_URL}/api/art/${track.id}`}
+                                            src={`${getServerUrl()}/api/art/${track.id}`}
                                             alt=""
                                             className="w-full h-full object-cover"
                                             loading="lazy"

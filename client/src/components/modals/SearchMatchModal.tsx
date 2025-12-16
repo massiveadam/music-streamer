@@ -34,7 +34,7 @@ export default function SearchMatchModal({ album, artist, onClose, onMatchApplie
         setLoading(true);
         setError(null);
         try {
-            const res = await axios.get(`${SERVER_URL}/api/musicbrainz/search`, {
+            const res = await axios.get(`${getServerUrl()}/api/musicbrainz/search`, {
                 params: { album: searchQuery, artist: artistQuery }
             });
             setResults(res.data.results || []);
@@ -51,7 +51,7 @@ export default function SearchMatchModal({ album, artist, onClose, onMatchApplie
     const handleApplyMatch = async (release: Release) => {
         setApplying(release.id);
         try {
-            await axios.post(`${SERVER_URL}/api/album/match`, {
+            await axios.post(`${getServerUrl()}/api/album/match`, {
                 album,
                 artist,
                 releaseMbid: release.id

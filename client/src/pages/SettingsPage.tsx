@@ -1,10 +1,10 @@
+import { SERVER_URL, getServerUrl } from '../config';
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCcw, Save, Trash2, Check, ExternalLink, Music, Loader } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { audioEngine, BUILT_IN_PRESETS, EQPreset } from '../audio/AudioEngine';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface SettingsPageProps {
     theme: string;
@@ -54,13 +54,13 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
 
     useEffect(() => {
         // Fetch public config
-        axios.get(`${SERVER_URL}/api/config/public`).then(res => {
+        axios.get(`${getServerUrl()}/api/config/public`).then(res => {
             setPublicLastFmKey(res.data.lastfm_api_key);
         });
 
         // Fetch Last.fm status for current user
         if (token) {
-            axios.get(`${SERVER_URL}/api/user/lastfm-status`, {
+            axios.get(`${getServerUrl()}/api/user/lastfm-status`, {
                 headers: { Authorization: `Bearer ${token}` }
             }).then(res => {
                 if (res.data.connected) {
@@ -72,11 +72,11 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
 
         // Fetch users and system settings if admin
         if (user?.is_admin === 1) {
-            axios.get(`${SERVER_URL}/api/users`)
+            axios.get(`${getServerUrl()}/api/users`)
                 .then(res => setUsersList(res.data))
                 .catch(console.error);
 
-            axios.get(`${SERVER_URL}/api/settings/system`)
+            axios.get(`${getServerUrl()}/api/settings/system`)
                 .then(res => setSystemSettings(res.data))
                 .catch(console.error);
         }
@@ -110,7 +110,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
             // Clear URL
             window.history.replaceState({}, document.title, window.location.pathname);
 
-            axios.post(`${SERVER_URL}/api/auth/lastfm/token`, { token })
+            axios.post(`${getServerUrl()}/api/auth/lastfm/token`, { token })
                 .then(res => {
                     setLastFmConnected(true);
                     setLastFmUsername(res.data.username);
@@ -132,7 +132,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
 
             // Save to user profile
             const bandsStr = preset.bands.map(b => b.gain).join(',');
-            axios.put(`${SERVER_URL}/api/user/eq`, { preset: bandsStr }).catch(console.error);
+            axios.put(`${getServerUrl()}/api/user/eq`, { preset: bandsStr }).catch(console.error);
         }
     };
 
@@ -143,8 +143,8 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
         const limit = parseInt(limitElement?.value) || 0;
         if (path) {
             try {
-                await axios.post(`${SERVER_URL}/api/clear`);
-                await axios.post(`${SERVER_URL}/api/scan`, { path, limit });
+                await axios.post(`${getServerUrl()}/api/clear`);
+                await axios.post(`${getServerUrl()}/api/scan`, { path, limit });
                 setShowScanOverlay(true);
             } catch (e) {
                 alert("Scan failed: " + (e as Error).message);
@@ -154,7 +154,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
 
     const handleEnrichment = async () => {
         try {
-            await axios.post(`${SERVER_URL}/api/enrich`);
+            await axios.post(`${getServerUrl()}/api/enrich`);
             alert("Enrichment started in background!");
         } catch (e: any) {
             alert("Failed: " + e.message);
@@ -162,7 +162,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
     };
 
     const saveSystemSettings = () => {
-        axios.put(`${SERVER_URL}/api/settings/system`, systemSettings)
+        axios.put(`${getServerUrl()}/api/settings/system`, systemSettings)
             .then(() => alert("System settings saved successfully."))
             .catch(err => alert("Failed to save settings: " + err.message));
     };
@@ -170,7 +170,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
     // Poll analysis status when running
     const pollAnalysisStatus = useCallback(async () => {
         try {
-            const res = await axios.get(`${SERVER_URL}/api/admin/analyze-status`, {
+            const res = await axios.get(`${getServerUrl()}/api/admin/analyze-status`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setAnalysisStatus(res.data);
@@ -182,7 +182,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
     // Poll enrichment status
     const pollEnrichmentStatus = useCallback(async () => {
         try {
-            const res = await axios.get(`${SERVER_URL}/api/enrich/status`);
+            const res = await axios.get(`${getServerUrl()}/api/enrich/status`);
             setEnrichmentStatus(res.data);
         } catch (e) {
             console.error('Failed to poll enrichment status:', e);
@@ -210,7 +210,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
 
     const handleStartAnalysis = async (reanalyze = false) => {
         try {
-            await axios.post(`${SERVER_URL}/api/admin/analyze-library`, { reanalyze }, {
+            await axios.post(`${getServerUrl()}/api/admin/analyze-library`, { reanalyze }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             // Start polling immediately
@@ -224,7 +224,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
     const handleStartFullProcessing = async () => {
         try {
             // Start enrichment first
-            await axios.post(`${SERVER_URL}/api/enrich/fast`, { workers: 3 }, {
+            await axios.post(`${getServerUrl()}/api/enrich/fast`, { workers: 3 }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setTimeout(pollEnrichmentStatus, 500);
@@ -237,7 +237,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
 
     const handleStopAnalysis = async () => {
         try {
-            await axios.post(`${SERVER_URL}/api/admin/analyze-stop`, {}, {
+            await axios.post(`${getServerUrl()}/api/admin/analyze-stop`, {}, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             pollAnalysisStatus();
@@ -247,9 +247,9 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
     };
 
     return (
-        <div className="flex-1 overflow-y-auto p-8 bg-app-bg">
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8 bg-app-bg safe-area-inset-top">
             <div className="max-w-2xl mx-auto">
-                <h1 className="text-3xl font-bold text-app-text mb-8">Settings</h1>
+                <h1 className="text-2xl md:text-3xl font-bold text-app-text mb-6 md:mb-8">Settings</h1>
 
                 {/* System Configuration (Admin Only) */}
                 {user?.is_admin === 1 && (
@@ -464,6 +464,56 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                     </div>
                 </div>
 
+                {/* Server Connection */}
+                <div className="bg-app-surface rounded-xl p-6 mb-6">
+                    <h2 className="text-lg font-bold text-app-text mb-4">Server Connection</h2>
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <div className="text-sm font-medium text-app-text">Connected Server</div>
+                                <div className="text-xs text-app-text-muted font-mono break-all">{getServerUrl() || 'Not configured'}</div>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    if (confirm('Change server? You will be logged out and need to reconfigure.')) {
+                                        localStorage.removeItem('openstream_server_url');
+                                        localStorage.removeItem('token');
+                                        window.location.reload();
+                                    }
+                                }}
+                                className="bg-app-bg border border-white/20 hover:bg-white/10 text-white rounded-lg px-4 py-2 font-medium transition-colors text-sm"
+                            >
+                                Change Server
+                            </button>
+                        </div>
+
+                        {/* Debug: Test Connection */}
+                        <div className="border-t border-white/10 pt-4">
+                            <button
+                                onClick={async () => {
+                                    const url = getServerUrl();
+                                    try {
+                                        const res = await fetch(`${url}/api/tracks?limit=1`);
+                                        if (res.ok) {
+                                            alert(`✓ Connection OK!\nURL: ${url}\nStatus: ${res.status}`);
+                                        } else {
+                                            alert(`✗ Error: ${res.status}\nURL: ${url}`);
+                                        }
+                                    } catch (e: any) {
+                                        alert(`✗ Failed to connect\nURL: ${url}\nError: ${e.message}`);
+                                    }
+                                }}
+                                className="bg-green-600 hover:bg-green-500 text-white rounded-lg px-4 py-2 font-medium transition-colors text-sm"
+                            >
+                                Test Connection
+                            </button>
+                            <div className="text-xs text-app-text-muted mt-2">
+                                localStorage URL: {localStorage.getItem('openstream_server_url') || '(empty)'}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 {/* Library Management (Admin Only) */}
                 {user?.is_admin === 1 && (
                     <div className="bg-app-surface rounded-xl p-6 mb-6 border border-red-500/20">
@@ -543,7 +593,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                                             <button
                                                 onClick={() => {
                                                     if (confirm(`Delete user ${u.username}?`)) {
-                                                        axios.delete(`${SERVER_URL}/api/users/${u.id}`)
+                                                        axios.delete(`${getServerUrl()}/api/users/${u.id}`)
                                                             .then(() => setUsersList(l => l.filter(x => x.id !== u.id)))
                                                             .catch(err => alert("Failed: " + err.response?.data?.error || err.message));
                                                     }
@@ -568,7 +618,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                                     const isAdmin = (form.elements.namedItem('is_admin') as HTMLInputElement).checked;
 
                                     if (username && password) {
-                                        axios.post(`${SERVER_URL}/api/users`, { username, password, display_name, isAdmin })
+                                        axios.post(`${getServerUrl()}/api/users`, { username, password, display_name, isAdmin })
                                             .then(res => {
                                                 setUsersList([...usersList, res.data]);
                                                 form.reset();

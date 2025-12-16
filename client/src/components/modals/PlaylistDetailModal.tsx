@@ -1,9 +1,9 @@
+import { SERVER_URL, getServerUrl } from '../../config';
 import { useState, useEffect } from 'react';
 import { X, Play, Shuffle, Trash2, ListMusic, GripVertical } from 'lucide-react';
 import axios from 'axios';
 import type { Track, Playlist } from '../../types';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface PlaylistDetailModalProps {
     playlist: Playlist;
@@ -29,7 +29,7 @@ export default function PlaylistDetailModal({
         const fetchTracks = async () => {
             setIsLoading(true);
             try {
-                const res = await axios.get(`${SERVER_URL}/api/playlists/${playlist.id}`);
+                const res = await axios.get(`${getServerUrl()}/api/playlists/${playlist.id}`);
                 // API returns full track objects with position, not just IDs
                 const tracks = res.data.tracks || [];
                 setPlaylistTracks(tracks);
@@ -64,7 +64,7 @@ export default function PlaylistDetailModal({
 
     const handleRemoveTrack = async (trackId: number) => {
         try {
-            await axios.delete(`${SERVER_URL}/api/playlists/${playlist.id}/tracks/${trackId}`);
+            await axios.delete(`${getServerUrl()}/api/playlists/${playlist.id}/tracks/${trackId}`);
             setPlaylistTracks(prev => prev.filter(t => t.id !== trackId));
             onRefresh?.();
         } catch (e) {
@@ -177,7 +177,7 @@ export default function PlaylistDetailModal({
                                 {/* Album Art */}
                                 {track.has_art ? (
                                     <img
-                                        src={`${SERVER_URL}/api/art/${track.id}`}
+                                        src={`${getServerUrl()}/api/art/${track.id}`}
                                         alt={track.album || ''}
                                         className="w-10 h-10 rounded object-cover"
                                     />

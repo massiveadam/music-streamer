@@ -248,7 +248,7 @@ export function NowPlaying({
             />
 
             {/* Left Side - Header + Main Content */}
-            <div className={`flex flex-col relative z-10 transition-all ${showQueue || showEq ? 'w-1/2' : 'w-full'}`}>
+            <div className={`flex flex-col relative z-10 transition-all ${showQueue || showEq ? 'hidden md:flex md:w-1/2' : 'w-full'}`}>
                 {/* Header */}
                 <div className="flex items-center justify-between px-6 py-4">
                     <button
@@ -408,9 +408,9 @@ export function NowPlaying({
                 </div>
             </div>
 
-            {/* EQ Panel - Full height sidebar */}
+            {/* EQ Panel - Full height sidebar, full screen on mobile */}
             {showEq && (
-                <div className="w-1/2 border-l border-white/10 p-6 pt-4 overflow-y-auto bg-black/60 backdrop-blur-md relative z-10">
+                <div className="w-full md:w-1/2 border-l border-white/10 p-4 md:p-6 pt-4 overflow-y-auto bg-black/60 backdrop-blur-md relative z-10">
                     <div className="flex items-center justify-between mb-6">
                         <h2 className="text-lg font-semibold text-white">Parametric EQ</h2>
                         <button
@@ -702,9 +702,9 @@ export function NowPlaying({
                 </div>
             )}
 
-            {/* Queue Panel - Full height sidebar */}
+            {/* Queue Panel - Full height sidebar, full screen on mobile */}
             {showQueue && (
-                <div className="w-1/2 border-l border-white/10 p-6 pt-4 overflow-y-auto bg-black/60 backdrop-blur-md relative z-10">
+                <div className="w-full md:w-1/2 border-l border-white/10 p-4 md:p-6 pt-4 overflow-y-auto bg-black/60 backdrop-blur-md relative z-10">
                     <div className="flex items-center justify-between mb-6">
                         <h2 className="text-lg font-semibold text-white">Up Next</h2>
                         <button

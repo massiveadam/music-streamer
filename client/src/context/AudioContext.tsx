@@ -1,9 +1,9 @@
+import { SERVER_URL, getServerUrl } from '../config';
 import React, { createContext, useContext, useState, useRef, useCallback, ReactNode } from 'react';
 import axios from 'axios';
 import { audioEngine } from '../audio/AudioEngine';
 import type { Track } from '../types';
 
-const SERVER_URL = 'http://localhost:3001';
 
 type DeckId = 'A' | 'B';
 
@@ -134,7 +134,7 @@ export function AudioProvider({ children }: AudioProviderProps) {
             setShowNowPlaying(true);
 
             // Log to listening history
-            axios.post(`${SERVER_URL}/api/history/log`, { trackId: nextTrack.id }).catch(() => { });
+            axios.post(`${getServerUrl()}/api/history/log`, { trackId: nextTrack.id }).catch(() => { });
         }, 100);
     }, [tracks, activeDeck]);
 
@@ -227,12 +227,12 @@ export function AudioProvider({ children }: AudioProviderProps) {
             {/* Hidden audio elements */}
             <audio
                 ref={audioRefA}
-                src={deckATrack ? `${SERVER_URL}/api/stream/${deckATrack.id}` : undefined}
+                src={deckATrack ? `${getServerUrl()}/api/stream/${deckATrack.id}` : undefined}
                 preload="auto"
             />
             <audio
                 ref={audioRefB}
-                src={deckBTrack ? `${SERVER_URL}/api/stream/${deckBTrack.id}` : undefined}
+                src={deckBTrack ? `${getServerUrl()}/api/stream/${deckBTrack.id}` : undefined}
                 preload="auto"
             />
             {children}

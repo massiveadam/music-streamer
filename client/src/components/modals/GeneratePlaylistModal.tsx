@@ -1,10 +1,10 @@
+import { SERVER_URL, getServerUrl } from '../../config';
 import { useState, useEffect } from 'react';
 import { X, Wand2, Play, Save, Check } from 'lucide-react';
 import axios from 'axios';
 import type { Track } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface PlaylistTemplate {
     id: string;
@@ -31,7 +31,7 @@ export default function GeneratePlaylistModal({ onClose, onSuccess }: GeneratePl
     const [saved, setSaved] = useState(false);
 
     useEffect(() => {
-        axios.get(`${SERVER_URL}/api/playlist-templates`)
+        axios.get(`${getServerUrl()}/api/playlist-templates`)
             .then(res => {
                 setTemplates(res.data);
                 if (res.data.length > 0) {
@@ -65,7 +65,7 @@ export default function GeneratePlaylistModal({ onClose, onSuccess }: GeneratePl
         if (!selectedTemplate) return;
         setPreviewing(true);
         try {
-            const res = await axios.post(`${SERVER_URL}/api/playlists/generate`, {
+            const res = await axios.post(`${getServerUrl()}/api/playlists/generate`, {
                 template: selectedTemplate,
                 params,
                 save: false,
@@ -84,7 +84,7 @@ export default function GeneratePlaylistModal({ onClose, onSuccess }: GeneratePl
         if (!selectedTemplate) return;
         setLoading(true);
         try {
-            const res = await axios.post(`${SERVER_URL}/api/playlists/generate`, {
+            const res = await axios.post(`${getServerUrl()}/api/playlists/generate`, {
                 template: selectedTemplate,
                 params,
                 name: playlistName,

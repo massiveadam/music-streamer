@@ -1,3 +1,4 @@
+import { SERVER_URL, getServerUrl } from '../../config';
 import { useState, useEffect } from 'react';
 import { X, Play, Disc, ExternalLink, Plus, ListMusic, FolderHeart } from 'lucide-react';
 import AddToPlaylistModal from './AddToPlaylistModal';
@@ -5,7 +6,6 @@ import AddToCollectionModal from './AddToCollectionModal';
 import axios from 'axios';
 import type { Track, Artist, Credit } from '../../types';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface ArtistDetails {
     artist: Artist;
@@ -44,7 +44,7 @@ export default function ArtistDetailModal({
         const fetchDetails = async () => {
             setIsLoading(true);
             try {
-                const res = await axios.get(`${SERVER_URL}/api/artists/${artist.id}`);
+                const res = await axios.get(`${getServerUrl()}/api/artists/${artist.id}`);
                 setArtistDetails(res.data);
             } catch (e) {
                 console.error('Failed to fetch artist details:', e);
@@ -197,7 +197,7 @@ export default function ArtistDetailModal({
                                     </button>
                                     {album.sample_track_id ? (
                                         <img
-                                            src={`${SERVER_URL}/api/art/${album.sample_track_id}`}
+                                            src={`${getServerUrl()}/api/art/${album.sample_track_id}`}
                                             alt={album.album || album.title}
                                             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                                         />

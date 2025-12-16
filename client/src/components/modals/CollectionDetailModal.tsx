@@ -1,9 +1,9 @@
+import { SERVER_URL, getServerUrl } from '../../config';
 import { useState, useEffect } from 'react';
 import { X, Disc, Play, Shuffle, Trash2 } from 'lucide-react';
 import axios from 'axios';
 import type { Track } from '../../types';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface CollectionAlbum {
     name: string;
@@ -48,7 +48,7 @@ export default function CollectionDetailModal({
             try {
                 // If the collection prop has albums already (and we want to use them), we could.
                 // But fetching ensures freshness and full details if the prop was partial.
-                const res = await axios.get(`${SERVER_URL}/api/collections/${collection.id}`);
+                const res = await axios.get(`${getServerUrl()}/api/collections/${collection.id}`);
                 setAlbums(res.data.albums || []);
             } catch (e) {
                 console.error('Failed to fetch collection albums:', e);
@@ -79,7 +79,7 @@ export default function CollectionDetailModal({
 
     const handleRemoveAlbum = async (albumName: string, artistName: string) => {
         try {
-            await axios.delete(`${SERVER_URL}/api/collections/${collection.id}/albums`, {
+            await axios.delete(`${getServerUrl()}/api/collections/${collection.id}/albums`, {
                 data: { album: albumName, artist: artistName }
             });
             setAlbums(prev => prev.filter(a => !(a.name === albumName && a.artist === artistName)));
@@ -142,7 +142,7 @@ export default function CollectionDetailModal({
                                             <img
                                                 loading="lazy"
                                                 decoding="async"
-                                                src={`${SERVER_URL}/api/art/${album.sample_track_id}`}
+                                                src={`${getServerUrl()}/api/art/${album.sample_track_id}`}
                                                 alt=""
                                                 className="w-full h-full object-cover"
                                             />
@@ -207,7 +207,7 @@ export default function CollectionDetailModal({
                                     <div className="aspect-square bg-app-surface rounded-lg mb-3 overflow-hidden shadow-lg group-hover:shadow-xl transition-all border border-white/5 group-hover:border-white/10">
                                         {album.sample_track_id ? (
                                             <img
-                                                src={`${SERVER_URL}/api/art/${album.sample_track_id}`}
+                                                src={`${getServerUrl()}/api/art/${album.sample_track_id}`}
                                                 alt={album.name}
                                                 className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                                             />

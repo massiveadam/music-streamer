@@ -2,7 +2,9 @@ import Database, { Database as DatabaseType } from 'better-sqlite3';
 import * as path from 'path';
 import type { Track, Artist, Release, Credit, Label, Tag, Playlist, PlaylistTrack, ListeningHistoryEntry, AlbumImage } from '../types';
 
-const dbPath = path.join(__dirname, 'library.db');
+// Use DATABASE_PATH env var for Docker, fallback to local for development
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'library.db');
+console.log('[DB] Using database path:', dbPath);
 const db: DatabaseType = new Database(dbPath);
 
 // Optimize for performance

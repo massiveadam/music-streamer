@@ -1,0 +1,35 @@
+# Dependencies
+node_modules
+server/node_modules
+client/node_modules
+
+# Build outputs
+client/dist
+client/android
+client/ios
+*.log
+
+# Database files (will be created in mounted volume)
+*.db
+*.db-shm
+*.db-wal
+
+# IDE and OS files
+.git
+.gitignore
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+!README.md
+
+# Development files
+.env
+.env.local
+server/.env
+.agent

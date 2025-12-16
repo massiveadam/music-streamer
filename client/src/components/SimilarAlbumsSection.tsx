@@ -1,8 +1,8 @@
+import { SERVER_URL, getServerUrl } from '../config';
 import { useState, useEffect, memo } from 'react';
 import { Disc } from 'lucide-react';
 import axios from 'axios';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface SimilarAlbum {
     album: string;
@@ -30,7 +30,7 @@ function SimilarAlbumsSection({ currentAlbum, currentArtist, onAlbumClick }: Sim
         const fetchSimilarAlbums = async () => {
             setLoading(true);
             try {
-                const res = await axios.get(`${SERVER_URL}/api/similar-albums`, {
+                const res = await axios.get(`${getServerUrl()}/api/similar-albums`, {
                     params: { album: currentAlbum, artist: currentArtist, limit: 5 }
                 });
                 setSimilarAlbums(res.data);
@@ -84,7 +84,7 @@ function SimilarAlbumsSection({ currentAlbum, currentArtist, onAlbumClick }: Sim
                         <div className="aspect-square bg-app-surface rounded-lg overflow-hidden shadow-lg group-hover:shadow-xl transition-shadow relative">
                             {album.has_art && album.sample_track_id ? (
                                 <img
-                                    src={`${SERVER_URL}/api/art/${album.sample_track_id}`}
+                                    src={`${getServerUrl()}/api/art/${album.sample_track_id}`}
                                     alt={album.album}
                                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                                     loading="lazy"

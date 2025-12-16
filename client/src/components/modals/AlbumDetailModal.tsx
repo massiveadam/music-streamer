@@ -1,3 +1,4 @@
+import { SERVER_URL, getServerUrl } from '../../config';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { X, Play, Disc, Plus, RefreshCcw, ListMusic, FolderHeart, MoreVertical, Search, Pencil, RotateCcw, Merge } from 'lucide-react';
 import axios from 'axios';
@@ -10,7 +11,6 @@ import MergeAlbumsModal from './MergeAlbumsModal';
 import SimilarAlbumsSection from '../SimilarAlbumsSection';
 import { getTrackProfiles } from '../../utils/sonicProfiles';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface Album {
     name: string;
@@ -122,7 +122,7 @@ export default function AlbumDetailModal({
     useEffect(() => {
         const fetchMetadata = async () => {
             try {
-                const res = await axios.get(`${SERVER_URL}/api/album-metadata`, {
+                const res = await axios.get(`${getServerUrl()}/api/album-metadata`, {
                     params: { album: album.name, artist: album.artist }
                 });
                 setAlbumMetadata(res.data);
@@ -137,7 +137,7 @@ export default function AlbumDetailModal({
     useEffect(() => {
         const fetchCredits = async () => {
             try {
-                const res = await axios.get(`${SERVER_URL}/api/credits/album/${encodeURIComponent(album.name)}/${encodeURIComponent(album.artist)}`);
+                const res = await axios.get(`${getServerUrl()}/api/credits/album/${encodeURIComponent(album.name)}/${encodeURIComponent(album.artist)}`);
                 setAlbumCredits(res.data || []);
             } catch (e) {
                 console.error('Failed to fetch credits:', e);
@@ -159,7 +159,7 @@ export default function AlbumDetailModal({
     return (
         <div className="fixed inset-0 z-[100] bg-app-bg text-app-text overflow-y-auto animate-in fade-in duration-200 custom-scrollbar">
             {/* Header Bar */}
-            <div className="sticky top-0 z-50 bg-app-bg border-b border-app-surface px-6 py-4 flex items-center justify-between">
+            <div className="sticky top-0 z-50 bg-app-bg border-b border-app-surface px-4 md:px-6 py-3 md:py-4 flex items-center justify-between safe-area-inset-top">
                 <button
                     onClick={onClose}
                     className="p-2 hover:bg-app-surface rounded-full transition-colors"
@@ -216,7 +216,7 @@ export default function AlbumDetailModal({
                                         setEnrichmentProgress({ step: 'Starting...', percent: 0 });
                                         try {
                                             setEnrichmentProgress({ step: 'Resetting metadata...', percent: 20 });
-                                            await axios.post(`${SERVER_URL}/api/album/re-enrich`, {
+                                            await axios.post(`${getServerUrl()}/api/album/re-enrich`, {
                                                 album: album.name,
                                                 artist: album.artist
                                             }, {
@@ -235,7 +235,7 @@ export default function AlbumDetailModal({
 
                                             setEnrichmentProgress({ step: 'Refreshing data...', percent: 95 });
                                             // Refresh metadata
-                                            const res = await axios.get(`${SERVER_URL}/api/album-metadata`, {
+                                            const res = await axios.get(`${getServerUrl()}/api/album-metadata`, {
                                                 params: { album: album.name, artist: album.artist }
                                             });
                                             setAlbumMetadata(res.data);
@@ -262,20 +262,20 @@ export default function AlbumDetailModal({
             </div>
 
             {/* Main Content */}
-            <div className="max-w-5xl mx-auto px-8 py-12">
+            <div className="max-w-5xl mx-auto px-4 md:px-8 py-6 md:py-12">
                 {/* Hero Section */}
-                <div className="flex flex-col md:flex-row gap-8 mb-8">
+                <div className="flex flex-col md:flex-row gap-4 md:gap-8 mb-6 md:mb-8">
                     {/* Album Artwork with Flip */}
-                    <div className="shrink-0 perspective-[1000px]">
+                    <div className="shrink-0 perspective-[1000px] mx-auto md:mx-0">
                         <div
-                            className={`w-64 h-64 relative transition-transform duration-700 [transform-style:preserve-3d] ${albumMetadata?.images?.find(i => i.type === 'back') ? 'cursor-pointer' : ''} ${isFlipped ? '[transform:rotateY(180deg)]' : ''}`}
+                            className={`w-48 h-48 md:w-64 md:h-64 relative transition-transform duration-700 [transform-style:preserve-3d] ${albumMetadata?.images?.find(i => i.type === 'back') ? 'cursor-pointer' : ''} ${isFlipped ? '[transform:rotateY(180deg)]' : ''}`}
                             onClick={() => albumMetadata?.images?.find(i => i.type === 'back') && setIsFlipped(!isFlipped)}
                         >
                             {/* Front Face */}
                             <div className="absolute inset-0 [backface-visibility:hidden] rounded-sm overflow-hidden shadow-lg bg-app-surface">
                                 {album.tracks[0]?.has_art ? (
                                     <img
-                                        src={`${SERVER_URL}/api/art/${album.tracks[0].id}`}
+                                        src={`${getServerUrl()}/api/art/${album.tracks[0].id}`}
                                         alt={album.name}
                                         className="w-full h-full object-cover"
                                     />
@@ -311,7 +311,7 @@ export default function AlbumDetailModal({
                             <div className="absolute inset-0 [backface-visibility:hidden] [transform:rotateY(180deg)] rounded-sm overflow-hidden shadow-lg bg-app-surface border border-app-surface">
                                 {albumMetadata?.images?.find(i => i.type === 'back') ? (
                                     <img
-                                        src={`${SERVER_URL}/api/art/release/${albumMetadata.release?.mbid}/back`}
+                                        src={`${getServerUrl()}/api/art/release/${albumMetadata.release?.mbid}/back`}
                                         alt="Back Cover"
                                         className="w-full h-full object-contain bg-black"
                                     />
@@ -325,8 +325,8 @@ export default function AlbumDetailModal({
                     </div>
 
                     {/* Album Info */}
-                    <div className="flex-1 flex flex-col justify-end min-w-0">
-                        <h1 className="text-5xl md:text-6xl font-serif font-normal leading-tight mb-3 text-app-text">
+                    <div className="flex-1 flex flex-col justify-end min-w-0 text-center md:text-left">
+                        <h1 className="text-3xl md:text-5xl lg:text-6xl font-serif font-normal leading-tight mb-2 md:mb-3 text-app-text">
                             {album.name}
                         </h1>
 
@@ -341,13 +341,13 @@ export default function AlbumDetailModal({
                                     onArtistClick({ id: 0, name: album.artist, mbid: null } as any);
                                 }
                             }}
-                            className="text-lg text-app-text-muted hover:text-app-text hover:underline self-start mb-4"
+                            className="text-base md:text-lg text-app-text-muted hover:text-app-text hover:underline self-center md:self-start mb-4"
                         >
                             {album.artist}
                         </button>
 
                         {/* Metadata Line */}
-                        <div className="flex flex-wrap gap-4 text-sm text-app-text-muted font-medium mb-4 items-center">
+                        <div className="flex flex-wrap gap-2 md:gap-4 text-xs md:text-sm text-app-text-muted font-medium mb-4 items-center justify-center md:justify-start">
                             <div className="flex flex-wrap gap-2">
                                 {/* Genre Tags - Primary */}
                                 {(album.genre || album.tracks[0]?.genre || 'Unknown Genre').split(/[,/]/)[0] && (
@@ -413,7 +413,7 @@ export default function AlbumDetailModal({
                         })()}
 
                         {/* Action Buttons */}
-                        <div className="flex gap-4 mt-6">
+                        <div className="flex gap-3 md:gap-4 mt-4 md:mt-6 justify-center md:justify-start">
                             <button
                                 onClick={handlePlayAlbum}
                                 className="bg-white/5 border border-white/10 hover:bg-white/10 text-white px-6 py-2.5 rounded-full font-medium text-sm flex items-center gap-2 shadow-sm transition-all"
@@ -502,7 +502,7 @@ export default function AlbumDetailModal({
                 </div>
 
                 {/* Tabs */}
-                <div className="flex items-center justify-center gap-8 mb-8 border-b border-app-surface sticky top-[69px] bg-app-bg z-40">
+                <div className="flex items-center justify-center gap-8 mb-6 md:mb-8 border-b border-app-surface sticky top-[53px] md:top-[69px] bg-app-bg z-40 safe-area-inset-top">
                     <button
                         onClick={() => setActiveTab('tracks')}
                         className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'tracks' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
@@ -724,7 +724,7 @@ export default function AlbumDetailModal({
                     onClose={() => setShowSearchModal(false)}
                     onMatchApplied={async () => {
                         // Refresh metadata after match applied
-                        const res = await axios.get(`${SERVER_URL}/api/album-metadata`, {
+                        const res = await axios.get(`${getServerUrl()}/api/album-metadata`, {
                             params: { album: album.name, artist: album.artist }
                         });
                         setAlbumMetadata(res.data);
@@ -742,7 +742,7 @@ export default function AlbumDetailModal({
                     onClose={() => setShowEditModal(false)}
                     onSaved={async () => {
                         // Refresh metadata after save
-                        const res = await axios.get(`${SERVER_URL}/api/album-metadata`, {
+                        const res = await axios.get(`${getServerUrl()}/api/album-metadata`, {
                             params: { album: album.name, artist: album.artist }
                         });
                         setAlbumMetadata(res.data);

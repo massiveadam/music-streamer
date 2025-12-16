@@ -16,7 +16,7 @@ export default function Sidebar({ mainTab, setMainTab, backgroundStatus }: Sideb
     const { logout } = useAuth();
 
     return (
-        <div className="w-16 bg-app-bg border-r border-app-surface flex flex-col items-center py-6 gap-6 shrink-0">
+        <div className="hidden md:flex w-16 bg-app-bg border-r border-app-surface flex-col items-center py-6 gap-6 shrink-0">
             <button
                 onClick={() => setMainTab('home')}
                 className={`p-3 rounded-xl transition-all border ${mainTab === 'home' ? 'bg-white/10 border-white/20 text-white shadow-[0_0_15px_rgba(255,255,255,0.1)]' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}

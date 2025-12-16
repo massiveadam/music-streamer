@@ -40,7 +40,7 @@ export default function EditMetadataModal({
 
             // 1. Rename if album/artist changed
             if (newAlbum !== album || newArtist !== artist) {
-                await axios.put(`${SERVER_URL}/api/album/rename`, {
+                await axios.put(`${getServerUrl()}/api/album/rename`, {
                     oldAlbum: album,
                     oldArtist: artist,
                     newAlbum: newAlbum !== album ? newAlbum : undefined,
@@ -53,7 +53,7 @@ export default function EditMetadataModal({
 
             // 2. Update metadata (description, year)
             if (description !== currentDescription || (year && parseInt(year) !== currentYear)) {
-                await axios.put(`${SERVER_URL}/api/album/metadata`, {
+                await axios.put(`${getServerUrl()}/api/album/metadata`, {
                     album: newAlbum,
                     artist: newArtist,
                     description: description || undefined,
@@ -66,7 +66,7 @@ export default function EditMetadataModal({
 
             // 3. Update cover art if URL provided
             if (coverArtUrl.trim()) {
-                await axios.post(`${SERVER_URL}/api/album/cover-art`, {
+                await axios.post(`${getServerUrl()}/api/album/cover-art`, {
                     album: newAlbum,
                     artist: newArtist,
                     imageUrl: coverArtUrl.trim()

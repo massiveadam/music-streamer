@@ -1,7 +1,7 @@
+import { SERVER_URL, getServerUrl } from '../../config';
 import { X, Disc, Play, Shuffle } from 'lucide-react';
 import type { Track } from '../../types';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface Album {
     album_name: string;
@@ -73,7 +73,7 @@ export default function LabelDetailModal({
                     <div className="w-48 h-48 bg-app-surface rounded-2xl flex items-center justify-center shadow-2xl border border-white/5 mb-6">
                         {label.albums[0]?.sample_track_id ? (
                             <img
-                                src={`${SERVER_URL}/api/art/${label.albums[0].sample_track_id}`}
+                                src={`${getServerUrl()}/api/art/${label.albums[0].sample_track_id}`}
                                 className="w-full h-full object-cover rounded-2xl"
                                 alt=""
                             />
@@ -122,7 +122,7 @@ export default function LabelDetailModal({
                             <div className="aspect-square bg-app-surface rounded-lg mb-3 overflow-hidden shadow-lg group-hover:shadow-xl transition-all border border-white/5 group-hover:border-white/10">
                                 {album.sample_track_id ? (
                                     <img
-                                        src={`${SERVER_URL}/api/art/${album.sample_track_id}`}
+                                        src={`${getServerUrl()}/api/art/${album.sample_track_id}`}
                                         alt={album.album_name}
                                         className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                                     />

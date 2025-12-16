@@ -1,9 +1,9 @@
+import { SERVER_URL, getServerUrl } from '../config';
 import { useState } from 'react';
 import { ListMusic, Disc, Plus, Wand2 } from 'lucide-react';
 import type { Playlist } from '../types';
 import { GeneratePlaylistModal } from '../components/modals';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface PlaylistsPageProps {
     playlistsViewMode: 'playlists' | 'collections';
@@ -33,21 +33,21 @@ export default function PlaylistsPage({
     const [showGenerateModal, setShowGenerateModal] = useState(false);
 
     return (
-        <div className="flex-1 overflow-y-auto p-8 bg-app-bg">
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8 bg-app-bg safe-area-inset-top">
             <div className="max-w-7xl mx-auto">
                 {/* Header */}
-                <div className="flex items-center justify-between mb-8">
-                    <div className="flex items-center gap-4">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 md:mb-8">
+                    <div className="flex items-center gap-2 md:gap-4">
                         <button
                             onClick={() => setPlaylistsViewMode('playlists')}
-                            className={`text-2xl font-bold transition-colors ${playlistsViewMode === 'playlists' ? 'text-app-text' : 'text-app-text-muted hover:text-white'}`}
+                            className={`text-lg md:text-2xl font-bold transition-colors ${playlistsViewMode === 'playlists' ? 'text-app-text' : 'text-app-text-muted hover:text-white'}`}
                         >
                             Playlists
                         </button>
                         <span className="text-app-text-muted">|</span>
                         <button
                             onClick={() => setPlaylistsViewMode('collections')}
-                            className={`text-2xl font-bold transition-colors ${playlistsViewMode === 'collections' ? 'text-app-text' : 'text-app-text-muted hover:text-white'}`}
+                            className={`text-lg md:text-2xl font-bold transition-colors ${playlistsViewMode === 'collections' ? 'text-app-text' : 'text-app-text-muted hover:text-white'}`}
                         >
                             Collections
                         </button>
@@ -94,7 +94,7 @@ export default function PlaylistsPage({
                 {/* Playlists Grid */}
                 {playlistsViewMode === 'playlists' && (
                     <>
-                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-6">
                             {/* Create Playlist Card */}
                             <div
                                 className="bg-app-surface/50 hover:bg-app-surface border-2 border-dashed border-app-surface hover:border-app-text-muted rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all group min-h-[200px]"
@@ -142,7 +142,7 @@ export default function PlaylistsPage({
                 {/* Collections Grid */}
                 {playlistsViewMode === 'collections' && (
                     <>
-                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-6">
                             {/* Create Collection Card */}
                             <div
                                 className="bg-app-surface/50 hover:bg-app-surface border-2 border-dashed border-app-surface hover:border-app-text-muted rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all group min-h-[200px]"
@@ -168,7 +168,7 @@ export default function PlaylistsPage({
                                                     <div key={i} className="bg-app-bg/50 rounded-sm overflow-hidden aspect-square">
                                                         {previewAlbum?.sample_track_id ? (
                                                             <img
-                                                                src={`${SERVER_URL}/api/art/${previewAlbum.sample_track_id}`}
+                                                                src={`${getServerUrl()}/api/art/${previewAlbum.sample_track_id}`}
                                                                 alt=""
                                                                 className="w-full h-full object-cover"
                                                             />

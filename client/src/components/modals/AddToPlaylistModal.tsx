@@ -1,9 +1,9 @@
+import { SERVER_URL, getServerUrl } from '../../config';
 import { useState, useEffect } from 'react';
 import { X, Plus, Music, Check, Loader2 } from 'lucide-react';
 import axios from 'axios';
 import type { Track, Playlist } from '../../types';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface AddToPlaylistModalProps {
     // Either a single track or multiple tracks (for album)
@@ -33,7 +33,7 @@ export default function AddToPlaylistModal({
         const fetchPlaylists = async () => {
             try {
                 const token = localStorage.getItem('token');
-                const res = await axios.get(`${SERVER_URL}/api/playlists`, {
+                const res = await axios.get(`${getServerUrl()}/api/playlists`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 setPlaylists(res.data || []);
@@ -58,14 +58,14 @@ export default function AddToPlaylistModal({
             if (trackIds.length === 1) {
                 // Single track
                 await axios.post(
-                    `${SERVER_URL}/api/playlists/${playlist.id}/tracks`,
+                    `${getServerUrl()}/api/playlists/${playlist.id}/tracks`,
                     { trackId: trackIds[0] },
                     { headers: { Authorization: `Bearer ${token}` } }
                 );
             } else {
                 // Multiple tracks (album)
                 await axios.post(
-                    `${SERVER_URL}/api/playlists/${playlist.id}/tracks/batch`,
+                    `${getServerUrl()}/api/playlists/${playlist.id}/tracks/batch`,
                     { trackIds },
                     { headers: { Authorization: `Bearer ${token}` } }
                 );
@@ -93,7 +93,7 @@ export default function AddToPlaylistModal({
         try {
             const token = localStorage.getItem('token');
             const res = await axios.post(
-                `${SERVER_URL}/api/playlists`,
+                `${getServerUrl()}/api/playlists`,
                 { name: newPlaylistName.trim() },
                 { headers: { Authorization: `Bearer ${token}` } }
             );

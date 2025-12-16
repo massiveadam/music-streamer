@@ -1,9 +1,9 @@
+import { SERVER_URL, getServerUrl } from '../config';
 import { useRef, memo, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Disc, Play } from 'lucide-react';
 import type { Track, Artist } from '../types';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface VirtualTrackListProps {
     tracks: Track[];
@@ -52,7 +52,7 @@ const TrackRow = memo(function TrackRow({
                     <img
                         loading="lazy"
                         decoding="async"
-                        src={`${SERVER_URL}/api/art/${track.id}`}
+                        src={`${getServerUrl()}/api/art/${track.id}`}
                         alt={track.title}
                         className="w-full h-full object-cover"
                     />

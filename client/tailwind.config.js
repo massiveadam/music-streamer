@@ -8,6 +8,10 @@ export default {
     ],
     theme: {
         extend: {
+            fontFamily: {
+                sans: ['Aileron', 'system-ui', 'sans-serif'],
+                serif: ['Libre Baskerville', 'Georgia', 'serif'],
+            },
             colors: {
                 // Dark, premium palette
                 'app-bg': '#0a0a0a',

@@ -1,8 +1,8 @@
+import { SERVER_URL, getServerUrl } from '../../config';
 import { useState, useEffect } from 'react';
 import { X, Plus, FolderHeart, Check, Loader2, Disc } from 'lucide-react';
 import axios from 'axios';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface Collection {
     id: number;
@@ -41,7 +41,7 @@ export default function AddToCollectionModal({
         const fetchCollections = async () => {
             try {
                 const token = localStorage.getItem('token');
-                const res = await axios.get(`${SERVER_URL}/api/collections`, {
+                const res = await axios.get(`${getServerUrl()}/api/collections`, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
                 setCollections(res.data || []);
@@ -63,7 +63,7 @@ export default function AddToCollectionModal({
         try {
             const token = localStorage.getItem('token');
             await axios.post(
-                `${SERVER_URL}/api/collections/${collection.id}/albums`,
+                `${getServerUrl()}/api/collections/${collection.id}/albums`,
                 { albumName, artistName },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
@@ -94,7 +94,7 @@ export default function AddToCollectionModal({
         try {
             const token = localStorage.getItem('token');
             const res = await axios.post(
-                `${SERVER_URL}/api/collections`,
+                `${getServerUrl()}/api/collections`,
                 { name: newCollectionName.trim() },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
@@ -121,7 +121,7 @@ export default function AddToCollectionModal({
                     <div className="flex items-center gap-3">
                         {sampleTrackId && (
                             <img
-                                src={`${SERVER_URL}/api/art/${sampleTrackId}`}
+                                src={`${getServerUrl()}/api/art/${sampleTrackId}`}
                                 alt={albumName}
                                 className="w-10 h-10 rounded-lg object-cover"
                             />
@@ -216,7 +216,7 @@ export default function AddToCollectionModal({
                                                 <div key={i} className="bg-app-bg/50 rounded-sm overflow-hidden">
                                                     {preview?.sample_track_id ? (
                                                         <img
-                                                            src={`${SERVER_URL}/api/art/${preview.sample_track_id}`}
+                                                            src={`${getServerUrl()}/api/art/${preview.sample_track_id}`}
                                                             alt=""
                                                             className="w-full h-full object-cover"
                                                         />

@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import axios from 'axios';
-
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+import { SERVER_URL, getServerUrl } from '../config';
 
 export interface User {
     id: number;
@@ -35,7 +34,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
 
             // Validate token and fetch user
-            axios.get(`${SERVER_URL}/api/auth/me`, { timeout: 5000 })
+            axios.get(`${getServerUrl()}/api/auth/me`, { timeout: 5000 })
                 .then(res => {
                     setUser(res.data);
                 })

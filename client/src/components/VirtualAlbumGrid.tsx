@@ -1,9 +1,9 @@
+import { SERVER_URL, getServerUrl } from '../config';
 import { useRef, memo, useCallback, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Disc, Play } from 'lucide-react';
 import type { Track } from '../types';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface Album {
     name: string;
@@ -36,7 +36,7 @@ const AlbumCard = memo(function AlbumCard({
                     <img
                         loading="lazy"
                         decoding="async"
-                        src={`${SERVER_URL}/api/art/${album.tracks[0].id}`}
+                        src={`${getServerUrl()}/api/art/${album.tracks[0].id}`}
                         alt={album.name}
                         className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
                     />
@@ -48,7 +48,8 @@ const AlbumCard = memo(function AlbumCard({
                 </div>
             </div>
             <h3 className="font-semibold truncate text-xs md:text-sm">{album.name}</h3>
-            <p className="text-xs text-app-text-muted truncate">{album.artist}</p>
+            <p className="text-xs text-app-text-muted truncate tracking-wide">{album.artist}</p>
+            {album.year && <p className="text-xs text-app-text-muted/70 mt-0.5">{album.year}</p>}
         </div>
     );
 });

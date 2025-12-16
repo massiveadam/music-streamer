@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { Music, User, Lock, ArrowRight, Loader } from 'lucide-react';
-
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+import { SERVER_URL, getServerUrl } from '../config';
 
 export default function LoginPage() {
     const { login } = useAuth();
@@ -17,7 +16,7 @@ export default function LoginPage() {
 
     useEffect(() => {
         // Check if verify setup logic is needed (e.g. first run)
-        axios.get(`${SERVER_URL}/api/auth/setup`, { timeout: 5000 })
+        axios.get(`${getServerUrl()}/api/auth/setup`, { timeout: 5000 })
             .then(res => {
                 if (res.data.setupRequired) {
                     setSetupRequired(true);

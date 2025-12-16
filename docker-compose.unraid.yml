@@ -1,0 +1,68 @@
+# OpenStream Docker Compose Configuration for Unraid
+# Uses pre-built image from Docker Hub + Watchtower for auto-updates
+
+services:
+  openstream:
+    # Pull from Docker Hub
+    image: cowmilk69/openstream:latest
+    container_name: openstream
+    restart: always  # Start on boot, restart on crash
+    ports:
+      - "3001:3001"
+    volumes:
+      # Music library - your Unraid share (read-only)
+      - /mnt/user/data/media/music/tagged:/music:ro
+      # Persistent database
+      - openstream_data:/data
+      # Artwork cache
+      - openstream_art:/app/server/storage/art
+    environment:
+      # Server configuration
+      - PORT=3001
+      - MUSIC_LIBRARY_PATH=/music
+      - DATABASE_PATH=/data/library.db
+      - ARTWORK_PATH=/app/server/storage/art
+      - NODE_ENV=production
+      
+      # JWT secret for authentication (generate with: openssl rand -base64 32)
+      - JWT_SECRET=CHANGE_ME_TO_A_SECURE_RANDOM_STRING
+      
+      # Optional: API keys for metadata enrichment
+      # - LASTFM_API_KEY=your_key_here
+      # - LASTFM_API_SECRET=your_secret_here
+    
+    labels:
+      # Enable Watchtower auto-updates for this container
+      - "com.centurylinklabs.watchtower.enable=true"
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # Watchtower - automatically pulls new images and restarts containers
+  watchtower:
+    image: containrrr/watchtower
+    container_name: watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Check for updates every 5 minutes (300 seconds)
+      - WATCHTOWER_POLL_INTERVAL=300
+      # Only update containers with the watchtower label
+      - WATCHTOWER_LABEL_ENABLE=true
+      # Cleanup old images after update
+      - WATCHTOWER_CLEANUP=true
+      # Optional: Send notifications (configure as needed)
+      # - WATCHTOWER_NOTIFICATIONS=email
+      # - WATCHTOWER_NOTIFICATION_EMAIL_FROM=sender@example.com
+      # - WATCHTOWER_NOTIFICATION_EMAIL_TO=recipient@example.com
+
+volumes:
+  openstream_data:
+    driver: local
+  openstream_art:
+    driver: local

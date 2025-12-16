@@ -1,0 +1,46 @@
+# OpenStream Docker Compose Configuration
+# For Unraid deployment via "Compose Manager" plugin or manual docker-compose
+
+services:
+  openstream:
+    build: .
+    container_name: openstream
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      # Music library - adjust path to your Unraid share
+      - /mnt/user/Music:/music:ro
+      # Persistent database and app data
+      - openstream_data:/data
+      # Artwork cache (optional separate volume for easy clearing)
+      - openstream_art:/app/server/storage/art
+    environment:
+      # Server configuration
+      - PORT=3001
+      - MUSIC_LIBRARY_PATH=/music
+      - DATABASE_PATH=/data/library.db
+      - NODE_ENV=production
+      
+      # JWT secret for authentication (generate a secure random string!)
+      # You can generate one with: openssl rand -base64 32
+      - JWT_SECRET=CHANGE_ME_TO_A_SECURE_RANDOM_STRING
+      
+      # Optional: API keys for metadata enrichment
+      # - LASTFM_API_KEY=your_key_here
+      # - LASTFM_API_SECRET=your_secret_here
+      # - DISCOGS_CONSUMER_KEY=your_key_here
+      # - DISCOGS_CONSUMER_SECRET=your_secret_here
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  openstream_data:
+    driver: local
+  openstream_art:
+    driver: local

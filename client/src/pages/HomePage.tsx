@@ -1,3 +1,4 @@
+import { SERVER_URL, getServerUrl } from '../config';
 import { useMemo, useCallback, memo, useState, useEffect } from 'react';
 import { Disc, Clock, Sparkles, ListMusic, Hash, Plus, Wand2 } from 'lucide-react';
 import axios from 'axios';
@@ -5,7 +6,6 @@ import type { Track, Artist } from '../types';
 import SmartMixCard from '../components/SmartMixCard';
 import SmartMixModal from '../components/SmartMixModal';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface SmartMix {
     id: number;
@@ -75,7 +75,7 @@ const AlbumCard = memo(function AlbumCard({
             <div className={`aspect-square bg-app-surface ${size === 'large' ? 'rounded-xl mb-4 shadow-2xl ring-1 ring-white/10 group-hover:ring-app-accent/50' : 'rounded-lg mb-3 shadow-lg group-hover:shadow-xl'} overflow-hidden group-hover:scale-[1.02] transition-transform duration-300`}>
                 {track.has_art ? (
                     <img
-                        src={`${SERVER_URL}/api/art/${track.id}`}
+                        src={`${getServerUrl()}/api/art/${track.id}`}
                         alt=""
                         className={`w-full h-full object-cover ${size === 'small' ? 'group-hover:scale-105 transition-transform duration-500' : ''}`}
                         loading="lazy"
@@ -114,7 +114,7 @@ const CollectionCard = memo(function CollectionCard({
                             <div key={i} className="bg-app-bg/50 rounded-sm overflow-hidden aspect-square">
                                 {previewAlbum?.sample_track_id ? (
                                     <img
-                                        src={`${SERVER_URL}/api/art/${previewAlbum.sample_track_id}`}
+                                        src={`${getServerUrl()}/api/art/${previewAlbum.sample_track_id}`}
                                         alt=""
                                         className="w-full h-full object-cover"
                                         loading="lazy"
@@ -166,7 +166,7 @@ const HistoryTrackRow = memo(function HistoryTrackRow({
             <div className="w-10 h-10 rounded-lg bg-app-surface overflow-hidden shrink-0">
                 {track.has_art ? (
                     <img
-                        src={`${SERVER_URL}/api/art/${track.id}`}
+                        src={`${getServerUrl()}/api/art/${track.id}`}
                         alt=""
                         className="w-full h-full object-cover"
                         loading="lazy"
@@ -209,7 +209,7 @@ function HomePage({
 
     // Fetch smart mixes on mount
     useEffect(() => {
-        axios.get(`${SERVER_URL}/api/mixes`)
+        axios.get(`${getServerUrl()}/api/mixes`)
             .then(res => setSmartMixes(res.data || []))
             .catch(err => console.error('Failed to fetch smart mixes:', err));
     }, []);
@@ -250,18 +250,18 @@ function HomePage({
 
     return (
         <>
-            <div className="flex-1 overflow-y-auto p-8 bg-app-bg">
+            <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8 bg-app-bg safe-area-inset-top">
                 <div className="max-w-7xl mx-auto">
-                    <header className="mb-12">
-                        <h1 className="text-4xl font-serif font-bold text-app-text">
+                    <header className="mb-6 md:mb-12">
+                        <h1 className="text-2xl md:text-4xl font-serif font-bold text-app-text">
                             Welcome Back
                         </h1>
                     </header>
 
                     {/* Smart Mixes - Curated For You */}
                     {smartMixes.length > 0 && (
-                        <div className="mb-16">
-                            <h2 className="text-2xl font-bold text-app-text mb-6 flex items-center gap-2">
+                        <div className="mb-8 md:mb-16">
+                            <h2 className="text-lg md:text-2xl font-bold text-app-text mb-4 md:mb-6 flex items-center gap-2">
                                 <Wand2 size={24} className="text-app-accent" />
                                 Curated For You
                             </h2>
@@ -279,12 +279,12 @@ function HomePage({
 
                     {/* 1. Recently Played Albums (Largest) */}
                     {uniqueRecentlyPlayed.length > 0 && (
-                        <div className="mb-16">
-                            <h2 className="text-2xl font-bold text-app-text mb-6 flex items-center gap-2">
+                        <div className="mb-8 md:mb-16">
+                            <h2 className="text-lg md:text-2xl font-bold text-app-text mb-4 md:mb-6 flex items-center gap-2">
                                 <Disc size={24} className="text-app-accent" />
                                 Jump Back In
                             </h2>
-                            <div className="flex gap-6 overflow-x-auto pb-4 no-scrollbar">
+                            <div className="flex gap-4 md:gap-6 overflow-x-auto pb-4 no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
                                 {uniqueRecentlyPlayed.map((track, i) => (
                                     <AlbumCard
                                         key={`${track.album}-${i}`}
@@ -300,12 +300,12 @@ function HomePage({
 
                     {/* 2. Recently Added Albums */}
                     {uniqueRecentlyAdded.length > 0 && (
-                        <div className="mb-16">
-                            <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
+                        <div className="mb-8 md:mb-16">
+                            <h2 className="text-lg md:text-xl font-bold text-app-text mb-4 md:mb-6 flex items-center gap-2">
                                 <Clock size={20} className="text-app-accent" />
                                 Fresh Arrivals
                             </h2>
-                            <div className="flex gap-5 overflow-x-auto pb-4 no-scrollbar">
+                            <div className="flex gap-3 md:gap-5 overflow-x-auto pb-4 no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
                                 {uniqueRecentlyAdded.map((track) => (
                                     <AlbumCard
                                         key={track.id}

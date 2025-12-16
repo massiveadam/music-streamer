@@ -1,19 +1,24 @@
+import { SERVER_URL, isServerConfigured, getServerUrl } from './config';
 import { useState, useEffect, useRef, useMemo, useCallback, ChangeEvent, MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import axios, { AxiosResponse } from 'axios';
 import { Play, Pause, SkipForward, SkipBack, Volume2, Sliders, Disc, Search, Settings, X, Clock, Calendar, Hash, PlusCircle, RefreshCcw, Home, Library, Sparkles, ListMusic, Shuffle, Repeat, Repeat1, LayoutGrid, List, Plus, RefreshCw, LogOut } from 'lucide-react';
 import { audioEngine } from './audio/AudioEngine';
 import { NowPlaying } from './components/NowPlaying';
 import Sidebar from './components/Sidebar';
+import MobileNav from './components/MobileNav';
 import MiniPlayer from './components/MiniPlayer';
 import ProgressBanner from './components/ProgressBanner';
-import { HomePage, LibraryPage, PlaylistsPage, SettingsPage } from './pages';
+import HomePage from './pages/HomePage';
+import SettingsPage from './pages/SettingsPage';
+import PlaylistsPage from './pages/PlaylistsPage';
+import LibraryPage from './pages/LibraryPage';
 import { AlbumDetailModal, ArtistDetailModal, LabelDetailModal, CollectionDetailModal, PlaylistDetailModal } from './components/modals';
 import type { Track, Artist, Credit, Playlist, RepeatMode, ViewTab, AlbumSort, Theme, LibraryView } from './types';
 import { extractColorFromImage } from './utils/colorUtils';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import LoginPage from './pages/LoginPage';
+import ServerConfigScreen from './pages/ServerConfigScreen';
 
-const SERVER_URL = 'http://localhost:3001';
 
 // Local types for UI state
 interface Album {
@@ -102,8 +107,24 @@ function MusicPlayer() {
   const audioRefA = useRef<HTMLAudioElement>(null);
   const audioRefB = useRef<HTMLAudioElement>(null);
 
-  // Fetch Tracks
+  // Fetch Tracks with caching
   useEffect(() => {
+    // Load cached tracks first for instant UI
+    const cached = localStorage.getItem('openstream_tracks_cache');
+    if (cached) {
+      try {
+        const { tracks: cachedTracks, timestamp } = JSON.parse(cached);
+        if (cachedTracks && cachedTracks.length > 0) {
+          console.log(`[App] Loaded ${cachedTracks.length} tracks from cache`);
+          setTracks(cachedTracks);
+          setIsLoading(false);
+        }
+      } catch (e) {
+        console.error('[App] Cache parse error:', e);
+      }
+    }
+
+    // Then fetch fresh data in background
     fetchTracks();
 
     // Simple URL routing
@@ -115,16 +136,38 @@ function MusicPlayer() {
   }, []);
 
   const fetchTracks = async () => {
-    setIsLoading(true);
-    console.log("Fetching tracks...");
+    // Only show loading if we don't have cached data
+    if (tracks.length === 0) setIsLoading(true);
+
+    // Use getServerUrl() to ensure we have the latest value from localStorage
+    const currentServerUrl = getServerUrl();
+    console.log("[App] fetchTracks called, SERVER_URL:", SERVER_URL, "getServerUrl():", currentServerUrl);
+
+    if (!currentServerUrl) {
+      console.error("[App] No server URL configured!");
+      setIsLoading(false);
+      return;
+    }
+
     try {
-      const res = await axios.get(`${SERVER_URL}/api/tracks?limit=100000`, { timeout: 10000 });
-      console.log("Tracks fetched:", res.data.length || "Array");
-      setTracks(res.data.tracks || res.data);
+      const res = await axios.get(`${currentServerUrl}/api/tracks?limit=100000`, { timeout: 30000 });
+      console.log("[App] Tracks fetched:", res.data.tracks?.length || res.data?.length || 0);
+      const fetchedTracks = res.data.tracks || res.data;
+      setTracks(fetchedTracks);
+
+      // Cache the tracks for faster subsequent loads
+      try {
+        localStorage.setItem('openstream_tracks_cache', JSON.stringify({
+          tracks: fetchedTracks,
+          timestamp: Date.now()
+        }));
+      } catch (e) {
+        console.warn('[App] Cache save failed (quota exceeded?):', e);
+      }
     } catch (err) {
-      console.error("Error fetching tracks:", err);
-      // Fallback to empty array so loading stops
-      setTracks([]);
+      console.error("[App] Error fetching tracks:", err);
+      // Only set empty array if we don't have cached data
+      if (tracks.length === 0) setTracks([]);
     } finally {
       setIsLoading(false);
     }
@@ -154,11 +197,13 @@ function MusicPlayer() {
     scanning?: { running: boolean; filesScanned: number };
   }>({});
 
+
+
   // Fetch Artists
   const [artists, setArtists] = useState([]);
   const fetchArtists = async () => {
     try {
-      const res = await axios.get(`${SERVER_URL}/api/artists`);
+      const res = await axios.get(`${getServerUrl()}/api/artists`);
       setArtists(res.data.artists || res.data);
     } catch (err) {
       console.error("Error fetching artists:", err);
@@ -171,25 +216,27 @@ function MusicPlayer() {
       fetchArtists();
     }
     if (view === 'labels') {
-      axios.get(`${SERVER_URL}/api/labels`)
+      axios.get(`${getServerUrl()}/api/labels`)
         .then(res => setAllLabels(Array.isArray(res.data) ? res.data : (res.data.labels || [])))
         .catch(err => console.error('Error fetching labels:', err));
     }
   }, [view]);
 
+
+
   // Fetch home page data
   useEffect(() => {
     if (mainTab === 'home') {
       // Fetch recently added
-      axios.get(`${SERVER_URL}/api/tracks/recent?limit=60`)
+      axios.get(`${getServerUrl()}/api/tracks/recent?limit=60`)
         .then(res => setRecentlyAdded(res.data))
         .catch(err => console.error('Error fetching recent:', err));
       // Fetch recently played
-      axios.get(`${SERVER_URL}/api/history/recent?limit=60`)
+      axios.get(`${getServerUrl()}/api/history/recent?limit=60`)
         .then(res => setRecentlyPlayed(res.data))
         .catch(err => console.error('Error fetching history:', err));
       // Fetch pinned collections
-      axios.get(`${SERVER_URL}/api/collections/home`)
+      axios.get(`${getServerUrl()}/api/collections/home`)
         .then(res => setPinnedCollections(res.data))
         .catch(err => console.error('Error fetching pinned collections:', err));
       // Also fetch artists count
@@ -197,10 +244,10 @@ function MusicPlayer() {
     }
     // Fetch playlists and collections for home and playlists tabs
     if (mainTab === 'home' || mainTab === 'playlists') {
-      axios.get(`${SERVER_URL}/api/playlists`)
+      axios.get(`${getServerUrl()}/api/playlists`)
         .then(res => setAllPlaylists(res.data))
         .catch(err => console.error('Error fetching all playlists:', err));
-      axios.get(`${SERVER_URL}/api/collections`)
+      axios.get(`${getServerUrl()}/api/collections`)
         .then(res => setAllCollections(res.data))
         .catch(err => console.error('Error fetching collections:', err));
     }
@@ -209,7 +256,7 @@ function MusicPlayer() {
   // Background status polling
   useEffect(() => {
     const pollStatus = () => {
-      axios.get(`${SERVER_URL}/api/enrich/status`)
+      axios.get(`${getServerUrl()}/api/enrich/status`)
         .then(res => setBackgroundStatus(prev => ({ ...prev, enrichment: res.data })))
         .catch(() => { });
     };
@@ -227,8 +274,8 @@ function MusicPlayer() {
   // Helper to refresh playlists
   const refreshPlaylists = async () => {
     const [all, home] = await Promise.all([
-      axios.get(`${SERVER_URL}/api/playlists`),
-      axios.get(`${SERVER_URL}/api/playlists/home`)
+      axios.get(`${getServerUrl()}/api/playlists`),
+      axios.get(`${getServerUrl()}/api/playlists/home`)
     ]);
     setAllPlaylists(all.data);
     setHomePlaylists(home.data);
@@ -298,6 +345,9 @@ function MusicPlayer() {
   const playTrack = async (index, transition = 'cut') => {
     if (isTransitioning || !Array.isArray(tracks) || index < 0 || index >= tracks.length) return;
 
+    // Resume AudioContext if suspended (required for mobile browsers)
+    audioEngine.resumeContext();
+
     setIsTransitioning(true);
     const nextTrack = tracks[index];
     const nextDeck = activeDeck === 'A' ? 'B' : 'A';
@@ -320,7 +370,7 @@ function MusicPlayer() {
         // Hard Cut - abort any ongoing crossfade
         audioEngine.decks[activeDeck].gain.gain.setValueAtTime(0, audioEngine.audioCtx!.currentTime);
         audioEngine.decks[nextDeck].gain.gain.setValueAtTime(1, audioEngine.audioCtx!.currentTime);
-        
+
         const currentAudio = activeDeck === 'A' ? audioRefA.current : audioRefB.current;
         if (currentAudio) {
           currentAudio.pause();
@@ -338,7 +388,7 @@ function MusicPlayer() {
       setShowNowPlaying(true);
 
       // Log to listening history
-      axios.post(`${SERVER_URL}/api/history/log`, { trackId: nextTrack.id }).catch(() => { });
+      axios.post(`${getServerUrl()}/api/history/log`, { trackId: nextTrack.id }).catch(() => { });
     } catch (error) {
       console.error('Playback error:', error);
     } finally {
@@ -347,6 +397,9 @@ function MusicPlayer() {
   };
 
   const togglePlay = () => {
+    // Resume AudioContext if suspended (required for mobile browsers)
+    audioEngine.resumeContext();
+
     if (currentTrackIndex === -1 && tracks.length > 0) {
       playTrack(0, 'cut');
       return;
@@ -378,7 +431,7 @@ function MusicPlayer() {
     if (showScanOverlay) {
       interval = setInterval(async () => {
         try {
-          const res = await axios.get(`${SERVER_URL}/api/status`);
+          const res = await axios.get(`${getServerUrl()}/api/status`);
           setScanStatus(res.data);
 
           if (!res.data.isScanning && res.data.processedCount > 0) {
@@ -402,7 +455,7 @@ function MusicPlayer() {
       const limit = parseInt(limitStr) || 0;
 
       try {
-        await axios.post(`${SERVER_URL}/api/scan`, { path, limit });
+        await axios.post(`${getServerUrl()}/api/scan`, { path, limit });
         setShowScanOverlay(true);
       } catch (e) { alert("Scan failed to start"); }
     }
@@ -488,7 +541,7 @@ function MusicPlayer() {
 
     // Scrobble current track if valid
     if (currentTrack) {
-      axios.post(`${SERVER_URL}/api/user/scrobble`, {
+      axios.post(`${getServerUrl()}/api/user/scrobble`, {
         artist: currentTrack.artist,
         track: currentTrack.title,
         album: currentTrack.album,
@@ -513,7 +566,7 @@ function MusicPlayer() {
     const timer = setTimeout(async () => {
       if (searchQuery) {
         try {
-          const res = await axios.get(`${SERVER_URL}/api/search?q=${encodeURIComponent(searchQuery)}&limit=200`);
+          const res = await axios.get(`${getServerUrl()}/api/search?q=${encodeURIComponent(searchQuery)}&limit=200`);
           setTracks(res.data.results || res.data);
         } catch (e) { console.error(e); }
       } else if (!moodFilter) {
@@ -589,7 +642,7 @@ function MusicPlayer() {
     // Actually, let's implement a refetch if we are in "Search" mode.
 
     // For this prototype, let's reload all then filter.
-    const res = await axios.get(`${SERVER_URL}/api/tracks`);
+    const res = await axios.get(`${getServerUrl()}/api/tracks`);
     const all = res.data;
     const filtered = all.filter(t => t.mood && t.mood.toLowerCase().includes(mood.toLowerCase()));
     setTracks(filtered);
@@ -611,12 +664,12 @@ function MusicPlayer() {
   useEffect(() => {
     if (selectedAlbum) {
       // Fetch Credits
-      axios.get(`${SERVER_URL}/api/credits/album/${encodeURIComponent(selectedAlbum.name)}`)
+      axios.get(`${getServerUrl()}/api/credits/album/${encodeURIComponent(selectedAlbum.name)}`)
         .then(res => setAlbumCredits(res.data))
         .catch(err => console.error(err));
 
       // Fetch Extended Metadata (Tags, Label)
-      axios.get(`${SERVER_URL}/api/album-metadata`, {
+      axios.get(`${getServerUrl()}/api/album-metadata`, {
         params: { album: selectedAlbum.name, artist: selectedAlbum.artist }
       })
         .then(res => setAlbumMetadata(res.data))
@@ -635,13 +688,13 @@ function MusicPlayer() {
     if (selectedArtist) {
       // Use MBID if available, otherwise use name
       const identifier = selectedArtist.mbid || selectedArtist.name;
-      axios.get(`${SERVER_URL}/api/artist/${encodeURIComponent(identifier)}`)
+      axios.get(`${getServerUrl()}/api/artist/${encodeURIComponent(identifier)}`)
         .then(res => setArtistDetails(res.data))
         .catch(err => {
           console.error('Error fetching artist details:', err);
           // Fallback to name-based lookup if MBID fails
           if (selectedArtist.mbid) {
-            axios.get(`${SERVER_URL}/api/artist/${encodeURIComponent(selectedArtist.name)}`)
+            axios.get(`${getServerUrl()}/api/artist/${encodeURIComponent(selectedArtist.name)}`)
               .then(res => setArtistDetails(res.data))
               .catch(err2 => console.error('Fallback artist lookup failed:', err2));
           }
@@ -658,7 +711,7 @@ function MusicPlayer() {
     const updateAccentColor = async () => {
       const track = tracks[currentTrackIndex];
       if (track && track.has_art) {
-        const imageUrl = `${SERVER_URL}/api/art/${track.id}`;
+        const imageUrl = `${getServerUrl()}/api/art/${track.id}`;
         console.log(`[App] Attempting to extract color from: ${imageUrl}`);
         const color = await extractColorFromImage(imageUrl);
         if (color) {
@@ -682,7 +735,7 @@ function MusicPlayer() {
   // Poll enrichment status
   useEffect(() => {
     const pollTimer = setInterval(() => {
-      axios.get(`${SERVER_URL}/api/enrich/status`)
+      axios.get(`${getServerUrl()}/api/enrich/status`)
         .then(res => {
           setEnrichmentStatus(res.data);
           // If detailed status available, maybe show current track?
@@ -692,11 +745,52 @@ function MusicPlayer() {
     return () => clearInterval(pollTimer);
   }, []);
 
+  // Handle back navigation (Android back button/gesture)
+  useEffect(() => {
+    const handleBack = (e: Event) => {
+      // Close modals in order of priority (topmost first)
+      if (showNowPlaying) {
+        setShowNowPlaying(false);
+        e.preventDefault();
+        return;
+      }
+      if (selectedAlbum) {
+        setSelectedAlbum(null);
+        e.preventDefault();
+        return;
+      }
+      if (selectedArtist) {
+        setSelectedArtist(null);
+        e.preventDefault();
+        return;
+      }
+      if (selectedLabel) {
+        setSelectedLabel(null);
+        e.preventDefault();
+        return;
+      }
+      if (selectedCollection) {
+        setSelectedCollection(null);
+        e.preventDefault();
+        return;
+      }
+      if (selectedPlaylist) {
+        setSelectedPlaylist(null);
+        e.preventDefault();
+        return;
+      }
+      // If nothing to close, let the default handler run (exit app)
+    };
+
+    window.addEventListener('app:back', handleBack);
+    return () => window.removeEventListener('app:back', handleBack);
+  }, [showNowPlaying, selectedAlbum, selectedArtist, selectedLabel, selectedCollection, selectedPlaylist]);
+
   // Toggle Favorite
   const toggleFavorite = async (e, trackId) => {
     e.stopPropagation();
     try {
-      const res = await axios.post(`${SERVER_URL}/api/favorite`, { id: trackId });
+      const res = await axios.post(`${getServerUrl()}/api/favorite`, { id: trackId });
       const { rating } = res.data;
 
       // Update local state
@@ -777,794 +871,300 @@ function MusicPlayer() {
 
         {/* ===== LIBRARY PAGE ===== */}
         {mainTab === 'library' && (
-          <>
-            {/* Header */}
-            <div className="h-16 border-b border-app-surface flex items-center px-6 gap-6 shrink-0 z-20 bg-app-bg/95 backdrop-blur">
-              {/* <h1 className="text-xl font-bold bg-gradient-to-r from-app-accent to-app-accent bg-clip-text text-transparent shrink-0">
-                Library
-              </h1> */}
+          <LibraryPage
+            tracks={tracks}
+            albums={albums}
+            artists={artists}
+            allLabels={allLabels}
+            view={view as any} // Cast to match stricter type in component
+            setView={setView as any}
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            albumSort={albumSort}
+            setAlbumSort={setAlbumSort}
+            setSelectedAlbum={setSelectedAlbum}
+            setSelectedArtist={setSelectedArtist}
+            setSelectedLabel={setSelectedLabel}
+            playTrack={playTrack}
+            showScanOverlay={showScanOverlay}
+            scanStatus={scanStatus}
+          />
+        )}
 
-              {/* Omnibox Search */}
-              <div className="flex-1 max-w-xl relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-app-text-muted" size={18} />
-                <input
-                  type="text"
-                  placeholder="Search library, producers, moods..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-app-surface border-none rounded-full py-2 pl-10 pr-10 text-sm text-app-text focus:ring-2 focus:ring-app-accent outline-none transition-all placeholder:text-app-text-muted/50"
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-white/10 rounded-full text-app-text-muted hover:text-white transition-colors"
-                  >
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-
-              {/* Sort Controls - Right Justified */}
-              <div className="ml-auto shrink-0">
-                <select
-                  value={albumSort}
-                  onChange={(e) => setAlbumSort(e.target.value)}
-                  className="bg-app-surface border border-white/10 rounded-lg px-3 py-1.5 text-sm text-app-text outline-none focus:border-app-accent cursor-pointer"
+        {/* Artist Detail Overlay */}
+        {
+          selectedArtist && artistDetails && (
+            <div className="fixed inset-0 z-[100] bg-app-bg text-app-text overflow-y-auto animate-in fade-in duration-200 custom-scrollbar">
+              {/* Header Bar */}
+              <div className="sticky top-0 z-50 bg-app-bg border-b border-app-surface px-6 py-4 flex items-center justify-between">
+                <button
+                  onClick={() => setSelectedArtist(null)}
+                  className="p-2 hover:bg-app-surface rounded-full transition-colors"
                 >
-                  <option value="artist">Sort by Artist</option>
-                  <option value="title">Sort by Title</option>
-                  <option value="year">Sort by Year</option>
-                  <option value="recent">Recently Added</option>
-                </select>
+                  <X size={20} className="text-app-text-muted" />
+                </button>
               </div>
-            </div>
 
-
-            {/* Rescan Confirmation Modal */}
-            {
-              showRescanModal && (
-                <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-200">
-                  <div className="bg-app-bg border border-app-surface rounded-lg p-6 max-w-md mx-4 shadow-2xl animate-in zoom-in-95 duration-200">
-                    <h2 className="text-xl font-bold text-app-text mb-3">Clear & Rescan Library</h2>
-                    <p className="text-app-text-muted mb-4 text-sm">This will delete all existing tracks and credits, then scan the specified directory.</p>
-
-                    {/* Path Input */}
-                    <div className="mb-4">
-                      <label className="block text-sm font-medium text-app-text mb-2">Music Directory Path</label>
-                      <input
-                        type="text"
-                        defaultValue="/home/adam/Music"
-                        id="scanPathInput"
-                        placeholder="/path/to/music"
-                        className="w-full bg-app-surface border border-app-surface focus:border-app-accent rounded-lg px-3 py-2 text-app-text text-sm outline-none transition-colors"
-                      />
+              <div className="max-w-5xl mx-auto px-8 pt-12 pb-32">
+                {/* Hero */}
+                <div className="flex flex-col gap-6 mb-12">
+                  {/* Info Only - No Image */}
+                  <div className="flex flex-col justify-center text-center items-center">
+                    <h1 className="text-5xl md:text-8xl font-serif font-bold text-app-text mb-6">
+                      {artistDetails.artist.name}
+                    </h1>
+                    {/* Stats */}
+                    <div className="flex gap-6 text-sm text-app-text-muted font-medium mb-6">
+                      {artistDetails.artist.country && <span>{artistDetails.artist.country}</span>}
+                      {artistDetails.artist.begin_date && <span>Est. {artistDetails.artist.begin_date}</span>}
+                      <span>{artistDetails.totalTracks} Tracks in Library</span>
                     </div>
 
-                    {/* Limit Input */}
-                    <div className="mb-6">
-                      <label className="block text-sm font-medium text-app-text mb-2">Scan Limit (0 = unlimited)</label>
-                      <input
-                        type="number"
-                        defaultValue="500"
-                        id="scanLimitInput"
-                        placeholder="500"
-                        min="0"
-                        className="w-full bg-app-surface border border-app-surface focus:border-app-accent rounded-lg px-3 py-2 text-app-text text-sm outline-none transition-colors"
-                      />
-                    </div>
-
-                    <div className="flex gap-3 justify-end">
-                      <button
-                        onClick={() => setShowRescanModal(false)}
-                        className="px-4 py-2 rounded-lg bg-app-surface text-app-text hover:bg-app-surface/80 transition-colors"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={async () => {
-                          const pathElement = document.getElementById('scanPathInput') as HTMLInputElement;
-                          const limitElement = document.getElementById('scanLimitInput') as HTMLInputElement;
-                          const path = pathElement?.value;
-                          const limit = parseInt(limitElement?.value) || 0;
-
-                          setShowRescanModal(false);
-
-                          if (path) {
-                            try {
-                              await axios.post(`${SERVER_URL}/api/clear`);
-                              await axios.post(`${SERVER_URL}/api/scan`, { path, limit });
-                              setShowScanOverlay(true);
-                            } catch (e) {
-                              alert("Scan failed to start: " + (e as Error).message);
-                            }
-                          }
-                        }}
-                        className="px-4 py-2 rounded-lg bg-transparent border border-white/20 text-white hover:bg-white/10 transition-colors"
-                      >
-                        Clear & Rescan
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )
-            }
-
-            {/* Artist Detail Overlay */}
-            {
-              selectedArtist && artistDetails && (
-                <div className="fixed inset-0 z-[100] bg-app-bg text-app-text overflow-y-auto animate-in fade-in duration-200 custom-scrollbar">
-                  {/* Header Bar */}
-                  <div className="sticky top-0 z-50 bg-app-bg border-b border-app-surface px-6 py-4 flex items-center justify-between">
-                    <button
-                      onClick={() => setSelectedArtist(null)}
-                      className="p-2 hover:bg-app-surface rounded-full transition-colors"
-                    >
-                      <X size={20} className="text-app-text-muted" />
-                    </button>
-                  </div>
-
-                  <div className="max-w-5xl mx-auto px-8 pt-12 pb-32">
-                    {/* Hero */}
-                    <div className="flex flex-col gap-6 mb-12">
-                      {/* Info Only - No Image */}
-                      <div className="flex flex-col justify-center text-center items-center">
-                        <h1 className="text-5xl md:text-8xl font-serif font-bold text-app-text mb-6">
-                          {artistDetails.artist.name}
-                        </h1>
-                        {/* Stats */}
-                        <div className="flex gap-6 text-sm text-app-text-muted font-medium mb-6">
-                          {artistDetails.artist.country && <span>{artistDetails.artist.country}</span>}
-                          {artistDetails.artist.begin_date && <span>Est. {artistDetails.artist.begin_date}</span>}
-                          <span>{artistDetails.totalTracks} Tracks in Library</span>
-                        </div>
-
-                        {/* Labels (Searchable) */}
-                        {artistDetails.labels && artistDetails.labels.length > 0 && (
-                          <div className="flex flex-wrap justify-center gap-2 mb-8">
-                            {artistDetails.labels.map(l => (
-                              <button
-                                key={l}
-                                onClick={() => {
-                                  setSearchQuery(l);
-                                  setSelectedArtist(null);
-                                  // Optional: trigger search effect
-                                }}
-                                className="px-3 py-1 rounded-full bg-app-surface text-xs text-app-text-muted border border-app-surface/50 hover:bg-white/10 hover:border-white/30 hover:text-white transition-colors uppercase tracking-wider"
-                              >
-                                {l}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-
-                        {/* Bio */}
-                        {artistDetails.artist.description ? (
-                          <div className="max-w-3xl mx-auto">
-                            <p className="text-base text-app-text-muted leading-relaxed mb-4">
-                              {artistDetails.artist.description.replace(/<[^>]*>?/gm, '')}
-                            </p>
-                            <div className="flex gap-4 justify-center text-sm">
-                              {artistDetails.artist.wiki_url && (
-                                <a
-                                  href={artistDetails.artist.wiki_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-app-accent hover:underline"
-                                >
-                                  Read more on Wikipedia →
-                                </a>
-                              )}
-                              {artistDetails.artist.mbid && (
-                                <a
-                                  href={`https://musicbrainz.org/artist/${artistDetails.artist.mbid}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-app-accent hover:underline"
-                                >
-                                  View on MusicBrainz →
-                                </a>
-                              )}
-                            </div>
-                          </div>
-                        ) : (
-                          <p className="text-sm text-app-text-muted italic">
-                            No biography available.
-                            {artistDetails.artist.mbid && (
-                              <a
-                                href={`https://musicbrainz.org/artist/${artistDetails.artist.mbid}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-app-accent hover:underline ml-2"
-                              >
-                                View on MusicBrainz →
-                              </a>
-                            )}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Tabs */}
-                    <div className="flex items-center gap-8 mb-8 border-b border-app-surface">
-                      <button
-                        onClick={() => setActiveTab('discography')}
-                        className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'discography' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
-                      >
-                        Discography
-                      </button>
-                      <button
-                        onClick={() => setActiveTab('credits')}
-                        className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'credits' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
-                      >
-                        Credits & Apperances
-                      </button>
-                    </div>
-
-                    {/* Content */}
-                    <div className="min-h-[400px]">
-                      {activeTab === 'discography' && (
-                        <div className="space-y-12">
-                          {(() => {
-                            const groups = {};
-                            if (artistDetails.albums) {
-                              artistDetails.albums.forEach(album => {
-                                // Default to 'Album' if type is missing (likely local files)
-                                const type = album.primary_type || 'Album';
-                                if (!groups[type]) groups[type] = [];
-                                groups[type].push(album);
-                              });
-                            }
-                            const order = ['Album', 'EP', 'Single', 'Other'];
-                            const keys = Object.keys(groups).sort((a, b) => {
-                              const ixA = order.indexOf(a);
-                              const ixB = order.indexOf(b);
-                              return (ixA === -1 ? 99 : ixA) - (ixB === -1 ? 99 : ixB);
-                            });
-
-                            if (keys.length === 0) return <div className="text-center text-app-text-muted py-12">No releases found.</div>;
-
-                            return keys.map(type => (
-                              <div key={type}>
-                                <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-6 border-b border-app-surface/50 pb-2">{type}s</h3>
-                                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-                                  {groups[type].map(album => (
-                                    <div
-                                      key={album.release_mbid || album.album}
-                                      className="group cursor-pointer"
-                                      onClick={async () => {
-                                        // First try to find in current albums
-                                        const target = albums.find(a => a.name === album.album && a.artist === artistDetails.artist.name);
-                                        if (target) {
-                                          setSelectedArtist(null);
-                                          setSelectedAlbum(target);
-                                        } else {
-                                          // Fallback: fetch all tracks, then find album
-                                          try {
-                                            const res = await axios.get(`${SERVER_URL}/api/tracks`);
-                                            const allTracks = res.data;
-                                            setTracks(allTracks);
-                                            // Find album from fetched tracks
-                                            const albumTracks = allTracks.filter((t: Track) => t.album === album.album && t.artist === artistDetails.artist.name);
-                                            if (albumTracks.length > 0) {
-                                              setSelectedArtist(null);
-                                              setSelectedAlbum({
-                                                name: album.album,
-                                                artist: artistDetails.artist.name,
-                                                tracks: albumTracks,
-                                                year: albumTracks[0]?.year || null,
-                                                genre: albumTracks[0]?.genre || null
-                                              });
-                                            }
-                                          } catch (e) {
-                                            console.error('Failed to fetch tracks:', e);
-                                          }
-                                        }
-                                      }}
-                                    >
-                                      <div className="aspect-square bg-app-surface rounded-lg mb-3 overflow-hidden shadow-lg group-hover:scale-105 transition-transform">
-                                        {album.art_path ? (
-                                          <img loading="lazy" decoding="async" src={`${SERVER_URL}/api/art/release/${album.release_mbid}/front`} alt={album.album} className="w-full h-full object-cover" />
-                                        ) : album.sample_track_id ? (
-                                          <img loading="lazy" decoding="async" src={`${SERVER_URL}/api/art/${album.sample_track_id}`} alt={album.album} className="w-full h-full object-cover" />
-                                        ) : (
-                                          <div className="w-full h-full flex items-center justify-center">
-                                            <Disc size={32} className="text-app-text-muted" />
-                                          </div>
-                                        )}
-                                      </div>
-                                      <h3 className="font-medium text-sm truncate">{album.title || album.album}</h3>
-                                      <p className="text-xs text-app-text-muted">
-                                        {album.release_date
-                                          ? album.release_date.substring(0, 4)
-                                          : album.track_year
-                                            ? album.track_year
-                                            : ''}
-                                      </p>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            ));
-                          })()}
-                        </div>
-                      )}
-
-                      {activeTab === 'credits' && (
-                        <div className="space-y-8">
-                          {Object.entries(artistDetails.credits).map(([role, credits]) => (
-                            <div key={role}>
-                              <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-4 border-b border-app-surface/50 pb-2">{role}</h3>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                {(credits as any[]).map((credit, i) => (
-                                  <div key={i} className="flex justify-between items-center p-2 rounded hover:bg-app-surface transition-colors">
-                                    <div className="min-w-0">
-                                      <div className="text-sm font-medium text-app-text truncate">{credit.title}</div>
-                                      <div className="text-xs text-app-text-muted truncate">{credit.album} • {credit.track_artist}</div>
-                                    </div>
-                                    <button
-                                      onClick={() => {
-                                        if (!Array.isArray(tracks)) return;
-                                        const idx = tracks.findIndex(t => t.id === credit.track_id);
-                                        if (idx !== -1) {
-                                          playTrack(idx, 'cut');
-                                        } else {
-                                          alert("Track not in current active playlist view");
-                                        }
-                                      }}
-                                      className="p-1.5 rounded-full hover:bg-app-accent/20 text-app-text-muted hover:text-white"
-                                    >
-                                      <Play size={12} fill="currentColor" />
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )
-            }
-
-
-            {/* Scan Overlay */}
-            {
-              showScanOverlay && (
-                <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center flex-col gap-4">
-                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-app-accent"></div>
-                  <h2 className="text-xl font-bold text-white">Indexing Library...</h2>
-                  <p className="text-app-text-muted">Processed: {scanStatus.processedCount}</p>
-                  <p className="text-xs text-app-text-muted max-w-md truncate">{scanStatus.currentFile}</p>
-                </div>
-              )
-            }
-
-            {/* Main Content */}
-            <div className="flex-1 overflow-y-auto p-6 bg-app-bg">
-              {tracks.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-app-text-muted flex-col gap-4">
-                  <Disc size={48} className="opacity-20" />
-                  <p>No tracks found. Try a different search or scan your library.</p>
-                </div>
-              ) : (
-                <>
-                  {/* View Toggle Controls - Sticky */}
-                  <div className="sticky top-0 z-30 flex items-center justify-between mb-10 bg-app-bg/60 backdrop-blur-xl border border-white/10 shadow-lg shadow-black/5 transition-all px-4 py-2 -mt-6 rounded-xl supports-[backdrop-filter]:bg-app-bg/60">
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setView('grid')}
-                        className={`p-2 rounded-lg transition-colors border ${view === 'grid' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
-                        title="Grid View"
-                      >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <rect x="3" y="3" width="7" height="7" />
-                          <rect x="14" y="3" width="7" height="7" />
-                          <rect x="14" y="14" width="7" height="7" />
-                          <rect x="3" y="14" width="7" height="7" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={() => setView('list')}
-                        className={`p-2 rounded-lg transition-colors border ${view === 'list' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
-                        title="List View"
-                      >
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <line x1="8" y1="6" x2="21" y2="6" />
-                          <line x1="8" y1="12" x2="21" y2="12" />
-                          <line x1="8" y1="18" x2="21" y2="18" />
-                          <line x1="3" y1="6" x2="3.01" y2="6" />
-                          <line x1="3" y1="12" x2="3.01" y2="12" />
-                          <line x1="3" y1="18" x2="3.01" y2="18" />
-                        </svg>
-                      </button>
-                      <div className="w-px h-6 bg-white/10 mx-1"></div>
-                      <button
-                        onClick={() => setView('artists')}
-                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${view === 'artists' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
-                      >
-                        Artists
-                      </button>
-                      <button
-                        onClick={() => setView('favorites')}
-                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${view === 'favorites' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
-                      >
-                        Favorites
-                      </button>
-                      <button
-                        onClick={() => setView('labels')}
-                        className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border ${view === 'labels' ? 'bg-white/10 border-white/20 text-white' : 'border-transparent text-app-text-muted hover:text-white hover:bg-white/5'}`}
-                      >
-                        Labels
-                      </button>
-                    </div>
-                    <div className="text-sm text-app-text-muted">
-                      {view === 'grid' || view === 'list' ? `${albums.length} albums` : view === 'artists' ? `${artists.length} artists` : `${allLabels.length} labels`}
-                    </div>
-                  </div>
-
-                  {/* Grid View */}
-                  {view === 'grid' && (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-4 md:gap-6 content-start pb-32">
-                      {albums.map((album) => (
-                        <div
-                          key={album.name}
-                          className="group cursor-pointer"
-                          onClick={async () => {
-                            // Remember which tracks matched the search (for highlighting)
-                            const matchedIds = album.tracks.map((t: Track) => t.id);
-                            // If this is from a filtered search view, fetch full album
-                            if (searchQuery) {
-                              try {
-                                const res = await axios.get(`${SERVER_URL}/api/tracks`);
-                                const allTracks = res.data.tracks || res.data;
-                                // Match by album name only (artist may differ for features/compilations)
-                                const fullAlbumTracks = allTracks.filter((t: Track) => t.album === album.name);
-                                if (fullAlbumTracks.length > 0) {
-                                  // Only show highlights if less than 80% of tracks matched
-                                  const matchRatio = matchedIds.length / fullAlbumTracks.length;
-                                  setMatchedTrackIds(matchRatio < 0.8 ? matchedIds : []);
-                                  setSelectedAlbum({ ...album, tracks: fullAlbumTracks });
-                                } else {
-                                  setMatchedTrackIds(matchedIds);
-                                  setSelectedAlbum(album);
-                                }
-                              } catch (e) {
-                                setSelectedAlbum(album);
-                              }
-                            } else {
-                              setMatchedTrackIds([]); // No search - no highlighting needed
-                              setSelectedAlbum(album);
-                            }
-                          }}
-                        >
-                          {/* Album Art Card */}
-                          <div className="aspect-square bg-app-surface rounded-lg mb-3 flex items-center justify-center group-hover:bg-app-accent/10 transition-colors relative overflow-hidden shadow-lg">
-                            {/* Artwork or Fallback */}
-                            {album.tracks[0].has_art ? (
-                              <img
-                                src={`${SERVER_URL}/api/art/${album.tracks[0].id}`}
-                                alt={album.name}
-                                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                loading="lazy"
-                              />
-                            ) : (
-                              <Disc size={32} className="text-app-text-muted group-hover:text-app-accent transition-colors" />
-                            )}
-
-                            {/* Play Overlay */}
-                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity backdrop-blur-[2px]">
-                              <Play size={32} className="fill-white drop-shadow-lg scale-95 group-hover:scale-100 transition-transform" />
-                            </div>
-                          </div>
-                          <h3 className="font-semibold truncate text-xs md:text-sm">{album.name}</h3>
-                          <p className="text-xs text-app-text-muted truncate">{album.artist}</p>
-                          {/* Mood Tag if present */}
-                          {album.tracks[0].mood && <span className="text-[10px] uppercase tracking-wider text-app-accent/80 border border-app-accent/30 px-1.5 rounded-sm mt-1 inline-block">{album.tracks[0].mood}</span>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* List View */}
-                  {view === 'list' && (
-                    <div className="space-y-1 pb-32">
-                      {Array.isArray(tracks) && tracks.map((track, index) => (
-                        <div
-                          key={track.id}
-                          onClick={() => playTrack(index, 'cut')}
-                          className="group flex items-center gap-4 px-4 py-3 bg-app-surface/50 hover:bg-app-surface rounded-lg cursor-pointer transition-colors border border-transparent hover:border-app-accent/20"
-                        >
-                          {/* Track Number / Play Icon */}
-                          <div className="w-8 text-center text-sm text-app-text-muted group-hover:text-app-accent font-medium">
-                            <span className="group-hover:hidden">{index + 1}</span>
-                            <Play size={14} fill="currentColor" className="hidden group-hover:inline-block" />
-                          </div>
-
-                          {/* Album Art */}
-                          <div className="w-12 h-12 bg-app-surface rounded-md overflow-hidden flex-shrink-0 border border-white/10">
-                            {track.has_art ? (
-                              <img
-                                src={`${SERVER_URL}/api/art/${track.id}`}
-                                alt={track.title}
-                                className="w-full h-full object-cover"
-                                loading="lazy"
-                              />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center">
-                                <Disc size={16} className="text-app-text-muted" />
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Track Info */}
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-app-text truncate">{track.title}</div>
-                            <div className="text-sm text-app-text-muted truncate">
-                              <span
-                                className="hover:text-app-accent hover:underline cursor-pointer transition-colors"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const artist = artists.find(a => a.name === track.artist);
-                                  if (artist) setSelectedArtist(artist);
-                                }}
-                              >
-                                {track.artist}
-                              </span>
-                              • {track.album}
-                            </div>
-                          </div>
-
-                          {/* Duration */}
-                          <div className="text-sm text-app-text-muted font-mono tabular-nums">
-                            {Math.floor(track.duration / 60)}:{(Math.floor(track.duration % 60)).toString().padStart(2, '0')}
-                          </div>
-
-                          {/* BPM */}
-                          {track.bpm && (
-                            <div className="text-xs text-app-text-muted font-mono w-12 text-right">
-                              {Math.round(track.bpm)}
-                            </div>
-                          )}
-
-                          {/* Heart Icon */}
-                          <button className="opacity-0 group-hover:opacity-100 p-1 hover:bg-app-accent/20 rounded transition-all">
-                            <svg className="w-4 h-4 text-app-text-muted hover:text-app-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                            </svg>
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Favorites View */}
-                  {view === 'favorites' && (
-                    <div className="space-y-1 pb-32">
-                      {Array.isArray(tracks) && tracks.filter(t => t.rating === 1).length > 0 ? (
-                        tracks.filter(t => t.rating === 1).map((track, index) => {
-                          const originalIndex = tracks.findIndex(t => t.id === track.id);
-                          return (
-                            <div
-                              key={track.id}
-                              onClick={() => playTrack(originalIndex, 'cut')}
-                              className="group flex items-center gap-4 px-4 py-3 bg-app-surface/50 hover:bg-app-surface rounded-lg cursor-pointer transition-colors border border-transparent hover:border-app-accent/20"
-                            >
-                              {/* Track Number / Play Icon */}
-                              <div className="w-8 text-center text-sm text-app-text-muted group-hover:text-app-accent font-medium">
-                                <Play size={14} fill="currentColor" className="hidden group-hover:inline-block" />
-                                <span className="group-hover:hidden">●</span>
-                              </div>
-
-                              {/* Album Art */}
-                              <div className="w-12 h-12 bg-app-surface rounded-md overflow-hidden flex-shrink-0 border border-white/10">
-                                {track.has_art ? (
-                                  <img
-                                    src={`${SERVER_URL}/api/art/${track.id}`}
-                                    alt={track.title}
-                                    className="w-full h-full object-cover"
-                                    loading="lazy"
-                                  />
-                                ) : (
-                                  <div className="w-full h-full flex items-center justify-center">
-                                    <Disc size={16} className="text-app-text-muted" />
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* Track Info */}
-                              <div className="flex-1 min-w-0">
-                                <div className="font-medium text-app-text truncate">{track.title}</div>
-                                <div className="text-sm text-app-text-muted truncate">
-                                  <span
-                                    className="hover:text-app-accent hover:underline cursor-pointer transition-colors"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      const artist = artists.find(a => a.name === track.artist);
-                                      if (artist) setSelectedArtist(artist);
-                                    }}
-                                  >
-                                    {track.artist}
-                                  </span>
-                                  • {track.album}
-                                </div>
-                              </div>
-
-                              {/* Duration */}
-                              <div className="text-sm text-app-text-muted font-mono tabular-nums">
-                                {Math.floor(track.duration / 60)}:{(Math.floor(track.duration % 60)).toString().padStart(2, '0')}
-                              </div>
-
-                              {/* Heart Icon (Always visible/active in Favorites) */}
-                              <button
-                                onClick={(e) => toggleFavorite(e, track.id)}
-                                className="p-1 hover:bg-white/10 rounded transition-all text-app-accent fill-app-accent"
-                              >
-                                <svg className="w-4 h-4" fill="currentColor" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                                </svg>
-                              </button>
-                            </div>
-                          );
-                        })
-                      ) : (
-                        <div className="text-center py-20">
-                          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-app-surface mb-6">
-                            <svg className="w-8 h-8 text-app-text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                            </svg>
-                          </div>
-                          <h3 className="text-xl font-bold text-app-text mb-2">No Favorites Yet</h3>
-                          <p className="text-app-text-muted">Heart songs to see them appear here!</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Artists View */}
-                  {/* Artists View - Text List */}
-                  {view === 'artists' && (
-                    <div className="flex flex-col pb-32 max-w-4xl mx-auto">
-                      {Array.isArray(artists) && artists.map(artist => (
-                        <div
-                          key={artist.id}
-                          className="group cursor-pointer flex items-center justify-between py-3 px-4 border-b border-app-surface/50 hover:bg-app-surface/50 transition-colors"
-                          onClick={() => setSelectedArtist(artist)}
-                        >
-                          <div className="flex items-center gap-4">
-                            <div className="w-10 h-10 rounded-full bg-app-surface flex items-center justify-center text-app-text-muted font-bold text-sm">
-                              {artist.name.charAt(0)}
-                            </div>
-                            <h3 className="font-medium text-app-text text-lg">{artist.name}</h3>
-                          </div>
-                          <span className="text-sm text-app-text-muted font-mono">{artist.track_count} tracks</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Labels View */}
-                  {view === 'labels' && (
-                    <div className="pb-32">
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-                        {Array.isArray(allLabels) && allLabels.map(label => (
-                          <div
-                            key={label.id}
-                            className="bg-app-surface hover:bg-app-surface/80 rounded-xl p-4 cursor-pointer transition-colors group"
-                            onClick={async () => {
-                              try {
-                                const res = await axios.get(`${SERVER_URL}/api/labels/${label.id}`);
-                                setSelectedLabel(res.data);
-                              } catch (e) { console.error(e); }
+                    {/* Labels (Searchable) */}
+                    {artistDetails.labels && artistDetails.labels.length > 0 && (
+                      <div className="flex flex-wrap justify-center gap-2 mb-8">
+                        {artistDetails.labels.map(l => (
+                          <button
+                            key={l}
+                            onClick={() => {
+                              setSearchQuery(l);
+                              setSelectedArtist(null);
+                              // Optional: trigger search effect
                             }}
+                            className="px-3 py-1 rounded-full bg-app-surface text-xs text-app-text-muted border border-app-surface/50 hover:bg-white/10 hover:border-white/30 hover:text-white transition-colors uppercase tracking-wider"
                           >
-                            {/* Hybrid View: Single Large or 4-Grid */}
-                            {label.preview_albums && label.preview_albums.length > 1 ? (
-                              /* Grid View for multiple albums */
-                              <div className="aspect-square bg-app-bg/50 rounded-lg mb-3 overflow-hidden shadow-lg border border-white/5 relative group-hover:border-white/10 transition-colors">
-                                <div className="grid grid-cols-2 grid-rows-2 gap-0.5 w-full h-full p-0.5">
-                                  {[0, 1, 2, 3].map(i => {
-                                    const previewAlbum = label.preview_albums?.[i];
-                                    return (
-                                      <div key={i} className="bg-app-bg/40 rounded-sm overflow-hidden aspect-square relative">
-                                        {previewAlbum?.sample_track_id ? (
-                                          <img
-                                            src={`${SERVER_URL}/api/art/${previewAlbum.sample_track_id}`}
-                                            alt={previewAlbum.album_name}
-                                            className="w-full h-full object-cover transition-opacity duration-300 opacity-90 group-hover:opacity-100"
-                                            loading="lazy"
-                                          />
-                                        ) : (
-                                          <div className="w-full h-full flex items-center justify-center">
-                                            <Disc size={16} className="text-white/10" />
-                                          </div>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            ) : (
-                              /* Single View for 1 album */
-                              <div className="aspect-square bg-app-bg/50 rounded-lg mb-3 overflow-hidden shadow-lg border border-white/5 relative group-hover:border-white/10 transition-colors">
-                                {label.preview_albums?.[0]?.sample_track_id ? (
-                                  <img
-                                    src={`${SERVER_URL}/api/art/${label.preview_albums[0].sample_track_id}`}
-                                    alt={label.name}
-                                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                  />
-                                ) : (
-                                  <div className="w-full h-full flex items-center justify-center bg-white/5">
-                                    <Disc size={48} className="text-white/10" />
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                            <div className="text-base font-bold text-app-text truncate">{label.name}</div>
-                            <div className="flex items-center justify-between mt-1">
-                              <span className="text-sm text-app-text-muted">{label.album_count || 0} albums</span>
-                              {label.country && (
-                                <span className="text-xs text-app-text-muted">{label.country}</span>
-                              )}
-                            </div>
-                          </div>
+                            {l}
+                          </button>
                         ))}
                       </div>
+                    )}
 
-                      {allLabels.length === 0 && (
-                        <div className="text-center py-16">
-                          <Disc size={64} className="mx-auto mb-4 text-app-text-muted opacity-50" />
-                          <h2 className="text-xl font-bold text-app-text mb-2">No labels found</h2>
-                          <p className="text-app-text-muted">Labels are auto-detected from your music metadata via MusicBrainz</p>
+                    {/* Bio */}
+                    {artistDetails.artist.description ? (
+                      <div className="max-w-3xl mx-auto">
+                        <p className="text-base text-app-text-muted leading-relaxed mb-4">
+                          {artistDetails.artist.description.replace(/<[^>]*>?/gm, '')}
+                        </p>
+                        <div className="flex gap-4 justify-center text-sm">
+                          {artistDetails.artist.wiki_url && (
+                            <a
+                              href={artistDetails.artist.wiki_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-app-accent hover:underline"
+                            >
+                              Read more on Wikipedia →
+                            </a>
+                          )}
+                          {artistDetails.artist.mbid && (
+                            <a
+                              href={`https://musicbrainz.org/artist/${artistDetails.artist.mbid}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-app-accent hover:underline"
+                            >
+                              View on MusicBrainz →
+                            </a>
+                          )}
                         </div>
-                      )}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-app-text-muted italic">
+                        No biography available.
+                        {artistDetails.artist.mbid && (
+                          <a
+                            href={`https://musicbrainz.org/artist/${artistDetails.artist.mbid}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-app-accent hover:underline ml-2"
+                          >
+                            View on MusicBrainz →
+                          </a>
+                        )}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Tabs */}
+                <div className="flex items-center gap-8 mb-8 border-b border-app-surface">
+                  <button
+                    onClick={() => setActiveTab('discography')}
+                    className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'discography' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
+                  >
+                    Discography
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('credits')}
+                    className={`pb-3 border-b-2 font-medium text-sm uppercase tracking-wider transition-colors ${activeTab === 'credits' ? 'border-app-accent text-app-text' : 'border-transparent text-app-text-muted hover:text-app-text'}`}
+                  >
+                    Credits & Apperances
+                  </button>
+                </div>
+
+                {/* Content */}
+                <div className="min-h-[400px]">
+                  {activeTab === 'discography' && (
+                    <div className="space-y-12">
+                      {(() => {
+                        const groups = {};
+                        if (artistDetails.albums) {
+                          artistDetails.albums.forEach(album => {
+                            // Default to 'Album' if type is missing (likely local files)
+                            const type = album.primary_type || 'Album';
+                            if (!groups[type]) groups[type] = [];
+                            groups[type].push(album);
+                          });
+                        }
+                        const order = ['Album', 'EP', 'Single', 'Other'];
+                        const keys = Object.keys(groups).sort((a, b) => {
+                          const ixA = order.indexOf(a);
+                          const ixB = order.indexOf(b);
+                          return (ixA === -1 ? 99 : ixA) - (ixB === -1 ? 99 : ixB);
+                        });
+
+                        if (keys.length === 0) return <div className="text-center text-app-text-muted py-12">No releases found.</div>;
+
+                        return keys.map(type => (
+                          <div key={type}>
+                            <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-6 border-b border-app-surface/50 pb-2">{type}s</h3>
+                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
+                              {groups[type].map(album => (
+                                <div
+                                  key={album.release_mbid || album.album}
+                                  className="group cursor-pointer"
+                                  onClick={async () => {
+                                    // First try to find in current albums
+                                    const target = albums.find(a => a.name === album.album && a.artist === artistDetails.artist.name);
+                                    if (target) {
+                                      setSelectedArtist(null);
+                                      setSelectedAlbum(target);
+                                    } else {
+                                      // Fallback: fetch all tracks, then find album
+                                      try {
+                                        const res = await axios.get(`${getServerUrl()}/api/tracks`);
+                                        const allTracks = res.data;
+                                        setTracks(allTracks);
+                                        // Find album from fetched tracks
+                                        const albumTracks = allTracks.filter((t: Track) => t.album === album.album && t.artist === artistDetails.artist.name);
+                                        if (albumTracks.length > 0) {
+                                          setSelectedArtist(null);
+                                          setSelectedAlbum({
+                                            name: album.album,
+                                            artist: artistDetails.artist.name,
+                                            tracks: albumTracks,
+                                            year: albumTracks[0]?.year || null,
+                                            genre: albumTracks[0]?.genre || null
+                                          });
+                                        }
+                                      } catch (e) {
+                                        console.error('Failed to fetch tracks:', e);
+                                      }
+                                    }
+                                  }}
+                                >
+                                  <div className="aspect-square bg-app-surface rounded-lg mb-3 overflow-hidden shadow-lg group-hover:scale-105 transition-transform">
+                                    {album.art_path ? (
+                                      <img loading="lazy" decoding="async" src={`${getServerUrl()}/api/art/release/${album.release_mbid}/front`} alt={album.album} className="w-full h-full object-cover" />
+                                    ) : album.sample_track_id ? (
+                                      <img loading="lazy" decoding="async" src={`${getServerUrl()}/api/art/${album.sample_track_id}`} alt={album.album} className="w-full h-full object-cover" />
+                                    ) : (
+                                      <div className="w-full h-full flex items-center justify-center">
+                                        <Disc size={32} className="text-app-text-muted" />
+                                      </div>
+                                    )}
+                                  </div>
+                                  <h3 className="font-medium text-sm truncate">{album.title || album.album}</h3>
+                                  <p className="text-xs text-app-text-muted">
+                                    {album.release_date
+                                      ? album.release_date.substring(0, 4)
+                                      : album.track_year
+                                        ? album.track_year
+                                        : ''}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ));
+                      })()}
                     </div>
                   )}
 
-                </>
-              )}
-            </div>
-
-            {/* Equalizer Panel (Overlay) - Legacy UI, Now Playing has better EQ */}
-            {
-              showEq && (
-                <div className="h-48 border-t border-app-surface bg-app-surface/50 backdrop-blur-md p-4 flex flex-col items-center animate-in slide-in-from-bottom">
-                  <div className="w-full max-w-3xl flex justify-between items-end h-32 pb-4">
-                    {audioEngine.getBands().map((band, i) => (
-                      <div key={band.frequency} className="flex flex-col items-center gap-2 h-full justify-end w-8">
-                        <input
-                          type="range"
-                          min="-12" max="12" step="0.1"
-                          value={eqGains[i] || 0}
-                          onChange={(e) => handleEqChange(i, e.target.value)}
-                          className="h-24 -rotate-90 w-24 origin-center accent-app-accent cursor-pointer"
-                          style={{ appearance: 'slider-vertical' as any }}
-                        />
-                        <span className="text-[10px] text-app-text-muted">
-                          {band.frequency >= 1000 ? `${band.frequency / 1000}k` : band.frequency}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  <button
-                    onClick={() => setShowNowPlaying(true)}
-                    className="text-xs text-app-accent hover:text-app-accent/80 mt-2"
-                  >
-                    Open Full Parametric EQ →
-                  </button>
+                  {activeTab === 'credits' && (
+                    <div className="space-y-8">
+                      {Object.entries(artistDetails.credits).map(([role, credits]) => (
+                        <div key={role}>
+                          <h3 className="text-sm font-semibold text-app-accent uppercase tracking-wider mb-4 border-b border-app-surface/50 pb-2">{role}</h3>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            {(credits as any[]).map((credit, i) => (
+                              <div key={i} className="flex justify-between items-center p-2 rounded hover:bg-app-surface transition-colors">
+                                <div className="min-w-0">
+                                  <div className="text-sm font-medium text-app-text truncate">{credit.title}</div>
+                                  <div className="text-xs text-app-text-muted truncate">{credit.album} • {credit.track_artist}</div>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    if (!Array.isArray(tracks)) return;
+                                    const idx = tracks.findIndex(t => t.id === credit.track_id);
+                                    if (idx !== -1) {
+                                      playTrack(idx, 'cut');
+                                    } else {
+                                      alert("Track not in current active playlist view");
+                                    }
+                                  }}
+                                  className="p-1.5 rounded-full hover:bg-app-accent/20 text-app-text-muted hover:text-white"
+                                >
+                                  <Play size={12} fill="currentColor" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )
-            }
-          </>
-        )
+              </div>
+            </div>
+          )
         }
+
+        {/* Equalizer Panel (Overlay) - Legacy UI, Now Playing has better EQ */}
+        {showEq && (
+          <div className="h-48 border-t border-app-surface bg-app-surface/50 backdrop-blur-md p-4 flex flex-col items-center animate-in slide-in-from-bottom">
+            <div className="w-full max-w-3xl flex justify-between items-end h-32 pb-4">
+              {audioEngine.getBands().map((band, i) => (
+                <div key={band.frequency} className="flex flex-col items-center gap-2 h-full justify-end w-8">
+                  <input
+                    type="range"
+                    min="-12" max="12" step="0.1"
+                    value={eqGains[i] || 0}
+                    onChange={(e) => handleEqChange(i, e.target.value)}
+                    className="h-24 -rotate-90 w-24 origin-center accent-app-accent cursor-pointer"
+                    style={{ appearance: 'slider-vertical' as any }}
+                  />
+                  <span className="text-[10px] text-app-text-muted">
+                    {band.frequency >= 1000 ? `${band.frequency / 1000}k` : band.frequency}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => setShowNowPlaying(true)}
+              className="text-xs text-app-accent hover:text-app-accent/80 mt-2"
+            >
+              Open Full Parametric EQ →
+            </button>
+          </div>
+        )}
+
 
         {/* HIDDEN DUAL DECKS - Moved outside conditional rendering for persistence */}
         <div style={{ display: 'none' }}>
           <audio
             ref={audioRefA}
-            src={deckATrack ? `${SERVER_URL}/api/stream/${deckATrack.id}` : undefined}
+            src={deckATrack ? `${getServerUrl()}/api/stream/${deckATrack.id}` : undefined}
             onEnded={handleTrackEnd}
             onTimeUpdate={(e) => {
               if (activeDeck === 'A') {
@@ -1576,7 +1176,7 @@ function MusicPlayer() {
           />
           <audio
             ref={audioRefB}
-            src={deckBTrack ? `${SERVER_URL}/api/stream/${deckBTrack.id}` : undefined}
+            src={deckBTrack ? `${getServerUrl()}/api/stream/${deckBTrack.id}` : undefined}
             onEnded={handleTrackEnd}
             onTimeUpdate={(e) => {
               if (activeDeck === 'B') {
@@ -1619,41 +1219,43 @@ function MusicPlayer() {
           )
         }
         {/* Collection Detail View Overlay */}
-        {selectedCollection && (
-          <CollectionDetailModal
-            collection={selectedCollection}
-            tracks={tracks}
-            onClose={() => setSelectedCollection(null)}
-            onPlayTrack={playTrack}
-            onAlbumClick={(albumName, artistName) => {
-              const albumData = Array.isArray(albums) ? albums.find(a => a.name === albumName && a.artist === artistName) : null;
-              if (albumData) {
-                setSelectedAlbum(albumData);
-                setSelectedCollection(null);
-              }
-            }}
-            onDelete={async () => {
-              if (confirm('Delete this collection?')) {
-                try {
-                  await axios.delete(`${SERVER_URL}/api/collections/${selectedCollection.id}`);
-                  const res = await axios.get(`${SERVER_URL}/api/collections`);
-                  setAllCollections(res.data);
+        {
+          selectedCollection && (
+            <CollectionDetailModal
+              collection={selectedCollection}
+              tracks={tracks}
+              onClose={() => setSelectedCollection(null)}
+              onPlayTrack={playTrack}
+              onAlbumClick={(albumName, artistName) => {
+                const albumData = Array.isArray(albums) ? albums.find(a => a.name === albumName && a.artist === artistName) : null;
+                if (albumData) {
+                  setSelectedAlbum(albumData);
                   setSelectedCollection(null);
-                } catch (e) {
-                  console.error('Failed to delete collection:', e);
                 }
-              }
-            }}
-            onRefresh={async () => {
-              try {
-                const res = await axios.get(`${SERVER_URL}/api/collections`);
-                setAllCollections(res.data);
-              } catch (e) {
-                console.error('Failed to refresh collections:', e);
-              }
-            }}
-          />
-        )}
+              }}
+              onDelete={async () => {
+                if (confirm('Delete this collection?')) {
+                  try {
+                    await axios.delete(`${getServerUrl()}/api/collections/${selectedCollection.id}`);
+                    const res = await axios.get(`${getServerUrl()}/api/collections`);
+                    setAllCollections(res.data);
+                    setSelectedCollection(null);
+                  } catch (e) {
+                    console.error('Failed to delete collection:', e);
+                  }
+                }
+              }}
+              onRefresh={async () => {
+                try {
+                  const res = await axios.get(`${getServerUrl()}/api/collections`);
+                  setAllCollections(res.data);
+                } catch (e) {
+                  console.error('Failed to refresh collections:', e);
+                }
+              }}
+            />
+          )
+        }
 
         {/* Playlist Detail View */}
         {
@@ -1683,7 +1285,7 @@ function MusicPlayer() {
                       // Logic to create new collection
                       const name = prompt('Collection Name:');
                       if (name) {
-                        axios.post(`${SERVER_URL}/api/collections`, {
+                        axios.post(`${getServerUrl()}/api/collections`, {
                           name,
                           description: '',
                           // Only add album if we have one
@@ -1710,7 +1312,7 @@ function MusicPlayer() {
                       key={col.id}
                       onClick={async () => {
                         if (addToCollectionAlbum.name) {
-                          await axios.post(`${SERVER_URL}/api/collections/${col.id}/albums`, {
+                          await axios.post(`${getServerUrl()}/api/collections/${col.id}/albums`, {
                             albumName: addToCollectionAlbum.name,
                             artistName: addToCollectionAlbum.artist
                           });
@@ -1722,7 +1324,7 @@ function MusicPlayer() {
                     >
                       <div className="w-12 h-12 rounded-lg bg-white/5 flex items-center justify-center overflow-hidden">
                         {col.preview_albums?.[0]?.sample_track_id ? (
-                          <img loading="lazy" decoding="async" src={`${SERVER_URL}/api/art/${col.preview_albums[0].sample_track_id}`} className="w-full h-full object-cover" />
+                          <img loading="lazy" decoding="async" src={`${getServerUrl()}/api/art/${col.preview_albums[0].sample_track_id}`} className="w-full h-full object-cover" />
                         ) : <ListMusic size={20} className="text-app-text-muted" />}
                       </div>
                       <div className="flex-1">
@@ -1752,7 +1354,7 @@ function MusicPlayer() {
                   const name = formData.get('name') as string;
                   const desc = formData.get('description') as string;
                   if (name) {
-                    await axios.post(`${SERVER_URL}/api/playlists`, { name, description: desc });
+                    await axios.post(`${getServerUrl()}/api/playlists`, { name, description: desc });
                     refreshPlaylists();
                     setShowPlaylistModal(false);
                   }
@@ -1888,7 +1490,7 @@ function MusicPlayer() {
           }}
           onFavorite={async (id) => {
             try {
-              const res = await axios.post(`${SERVER_URL}/api/favorite`, { id });
+              const res = await axios.post(`${getServerUrl()}/api/favorite`, { id });
               setTracks(prev => Array.isArray(prev) ? prev.map(t => t.id === id ? { ...t, rating: res.data.rating } : t) : prev);
             } catch (e) { console.error(e); }
           }}
@@ -1947,25 +1549,58 @@ function MusicPlayer() {
           />
         )
       }
+
+      {/* Mobile Bottom Navigation */}
+      <MobileNav mainTab={mainTab} setMainTab={setMainTab} />
     </div >
   );
 }
 
 function AppContent() {
   const { user, isLoading } = useAuth();
+  const [serverConfigured, setServerConfigured] = useState(() => isServerConfigured());
+  const [connectionError, setConnectionError] = useState<string | undefined>();
 
   // Safety timeout for the spinner
   useEffect(() => {
     const timer = setTimeout(() => {
       if (isLoading) {
         console.warn("Forcing loading to stop after 8s safety timeout");
-        // Since we can't force set isLoading in context from here easily without exposing it,
-        // we can just render the Login page if it times out
-        // But better is to trust the timeout we added to AuthContext.
       }
     }, 8000);
     return () => clearTimeout(timer);
   }, [isLoading]);
+
+  // Check server connection on mount
+  useEffect(() => {
+    if (serverConfigured) {
+      const serverUrl = getServerUrl();
+      fetch(`${serverUrl}/api/auth/setup`, { method: 'GET' })
+        .then(res => {
+          if (!res.ok) throw new Error('Server returned error');
+        })
+        .catch(err => {
+          console.error('Server connection failed:', err);
+          setConnectionError('Could not connect to server. Please check the URL.');
+          setServerConfigured(false);
+        });
+    }
+  }, [serverConfigured]);
+
+  // Show server config screen if not configured
+  if (!serverConfigured) {
+    return (
+      <ServerConfigScreen
+        onConfigured={() => {
+          setConnectionError(undefined);
+          setServerConfigured(true);
+          // Force page reload to reinitialize with new server URL
+          window.location.reload();
+        }}
+        initialError={connectionError}
+      />
+    );
+  }
 
   if (isLoading) {
     return (
@@ -1990,3 +1625,4 @@ export default function App() {
     </AuthProvider>
   );
 }
+

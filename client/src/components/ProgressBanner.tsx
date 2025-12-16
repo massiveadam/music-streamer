@@ -1,8 +1,8 @@
+import { SERVER_URL, getServerUrl } from '../config';
 import { useEffect, useState } from 'react';
 import { RefreshCw, X } from 'lucide-react';
 import axios from 'axios';
 
-const SERVER_URL = 'http://localhost:3001';
 
 interface EnrichmentStatus {
     isEnriching: boolean;
@@ -31,7 +31,7 @@ export default function ProgressBanner() {
         const poll = async () => {
             // Poll enrichment status
             try {
-                const enrichRes = await axios.get(`${SERVER_URL}/api/enrich/status`);
+                const enrichRes = await axios.get(`${getServerUrl()}/api/enrich/status`);
                 setEnrichment(enrichRes.data);
             } catch (e) {
                 // Ignore enrichment errors
@@ -39,7 +39,7 @@ export default function ProgressBanner() {
 
             // Poll analysis status separately to avoid one failure breaking the other
             try {
-                const analysisRes = await axios.get(`${SERVER_URL}/api/admin/analysis-status`);
+                const analysisRes = await axios.get(`${getServerUrl()}/api/admin/analysis-status`);
                 setAnalysis(analysisRes.data);
             } catch (e) {
                 // Ignore analysis errors

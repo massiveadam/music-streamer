@@ -31,7 +31,7 @@ export default function MergeAlbumsModal({
         setMerging(true);
         setError(null);
         try {
-            await axios.post(`${SERVER_URL}/api/album/merge`, {
+            await axios.post(`${getServerUrl()}/api/album/merge`, {
                 sourceAlbum,
                 sourceArtist,
                 targetAlbum: targetAlbum.trim(),

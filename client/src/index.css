@@ -12,10 +12,19 @@
 body {
   background-color: #0a0a0a;
   color: #e5e5e5;
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: 'Aileron', system-ui, sans-serif;
   margin: 0;
   overflow: hidden;
   /* App-like feel */
+}
+
+/* Typography utilities */
+.font-sans {
+  font-family: 'Aileron', system-ui, sans-serif;
+}
+
+.font-serif {
+  font-family: 'Libre Baskerville', Georgia, serif;
 }
 
 /* Custom scrollbar for webkit */
@@ -76,6 +85,7 @@ body {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
+  line-clamp: 1;
 }
 
 .line-clamp-2 {
@@ -83,6 +93,7 @@ body {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 /* Animation utilities */
@@ -188,4 +199,44 @@ body {
 [data-theme="light"] .skeleton {
   background: linear-gradient(90deg, #e5e5e5 25%, #d4d4d4 50%, #e5e5e5 75%);
   background-size: 200% 100%;
+}
+
+/* Safe Area Inset Utilities for Mobile */
+.safe-area-inset-top {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 1rem);
+}
+
+.safe-area-inset-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-area-inset-left {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+
+.safe-area-inset-right {
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.safe-area-inset-all {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* Mobile-specific adjustments */
+@media (max-width: 768px) {
+
+  /* Reduce side padding on mobile */
+  .mobile-compact {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+
+  /* Ensure content doesn't hide under bottom nav */
+  .pb-mobile-nav {
+    padding-bottom: 5rem;
+    /* Height of MobileNav + some buffer */
+  }
 }

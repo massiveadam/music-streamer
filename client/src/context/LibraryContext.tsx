@@ -1,8 +1,8 @@
+import { SERVER_URL, getServerUrl } from '../config';
 import React, { createContext, useContext, useState, useCallback, useEffect, ReactNode, useMemo } from 'react';
 import axios from 'axios';
 import type { Track, Artist, Playlist } from '../types';
 
-const SERVER_URL = 'http://localhost:3001';
 
 // Album type for computed albums
 interface Album {
@@ -201,7 +201,7 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
     const fetchTracks = useCallback(async () => {
         setIsLoading(true);
         try {
-            const res = await axios.get(`${SERVER_URL}/api/tracks?limit=100000`);
+            const res = await axios.get(`${getServerUrl()}/api/tracks?limit=100000`);
             setTracks(res.data.tracks || res.data);
         } catch (err) {
             console.error('Error fetching tracks:', err);
@@ -213,7 +213,7 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
     // Fetch artists
     const fetchArtists = useCallback(async () => {
         try {
-            const res = await axios.get(`${SERVER_URL}/api/artists`);
+            const res = await axios.get(`${getServerUrl()}/api/artists`);
             setArtists(res.data.artists || res.data);
         } catch (err) {
             console.error('Error fetching artists:', err);
@@ -223,8 +223,8 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
     // Refresh playlists
     const refreshPlaylists = useCallback(async () => {
         const [all, home] = await Promise.all([
-            axios.get(`${SERVER_URL}/api/playlists`),
-            axios.get(`${SERVER_URL}/api/playlists/home`)
+            axios.get(`${getServerUrl()}/api/playlists`),
+            axios.get(`${getServerUrl()}/api/playlists/home`)
         ]);
         setAllPlaylists(all.data);
         setHomePlaylists(home.data);
@@ -240,7 +240,7 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
         if (view === 'artists') {
             fetchArtists();
         } else if (view === 'labels') {
-            axios.get(`${SERVER_URL}/api/labels`)
+            axios.get(`${getServerUrl()}/api/labels`)
                 .then(res => setAllLabels(res.data))
                 .catch(err => console.error('Error fetching labels:', err));
         }
@@ -249,23 +249,23 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
     // Fetch home page data
     useEffect(() => {
         if (mainTab === 'home') {
-            axios.get(`${SERVER_URL}/api/tracks/recent?limit=60`)
+            axios.get(`${getServerUrl()}/api/tracks/recent?limit=60`)
                 .then(res => setRecentlyAdded(res.data))
                 .catch(err => console.error('Error fetching recent:', err));
-            axios.get(`${SERVER_URL}/api/history/recent?limit=60`)
+            axios.get(`${getServerUrl()}/api/history/recent?limit=60`)
                 .then(res => setRecentlyPlayed(res.data))
                 .catch(err => console.error('Error fetching history:', err));
-            axios.get(`${SERVER_URL}/api/collections/home`)
+            axios.get(`${getServerUrl()}/api/collections/home`)
                 .then(res => setPinnedCollections(res.data))
                 .catch(err => console.error('Error fetching pinned collections:', err));
             fetchArtists();
         }
 
         if (mainTab === 'home' || mainTab === 'playlists') {
-            axios.get(`${SERVER_URL}/api/playlists`)
+            axios.get(`${getServerUrl()}/api/playlists`)
                 .then(res => setAllPlaylists(res.data))
                 .catch(err => console.error('Error fetching playlists:', err));
-            axios.get(`${SERVER_URL}/api/collections`)
+            axios.get(`${getServerUrl()}/api/collections`)
                 .then(res => setAllCollections(res.data))
                 .catch(err => console.error('Error fetching collections:', err));
         }
@@ -274,7 +274,7 @@ export function LibraryProvider({ children }: LibraryProviderProps) {
     // Background status polling
     useEffect(() => {
         const pollStatus = () => {
-            axios.get(`${SERVER_URL}/api/enrich/status`)
+            axios.get(`${getServerUrl()}/api/enrich/status`)
                 .then(res => setBackgroundStatus(prev => ({ ...prev, enrichment: res.data })))
                 .catch(() => { });
         };

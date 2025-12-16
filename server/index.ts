@@ -15,10 +15,10 @@ import type { AuthRequest } from './auth';
 import * as audioAnalyzer from './audioAnalyzer';
 
 const app = express();
-const PORT = 3001;
+const PORT = parseInt(process.env.PORT || '3001', 10);
 
 app.use(cors({
-    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : ['http://localhost:5173', 'http://localhost:3000'],
+    origin: true, // Allow all origins for mobile app access
     credentials: true
 }));
 app.use(express.json());
@@ -70,9 +70,10 @@ function ensureDir(dirPath: string): void {
     }
 }
 
-// Artwork Storage Path
-const ART_DIR = path.join(__dirname, 'storage', 'art');
+// Artwork Storage Path (configurable for Docker)
+const ART_DIR = process.env.ARTWORK_PATH || path.join(__dirname, 'storage', 'art');
 ensureDir(ART_DIR);
+console.log('[Server] Artwork directory:', ART_DIR);
 
 // Process a single audio file
 async function processFile(fullPath: string): Promise<boolean> {
@@ -438,6 +439,7 @@ app.get('/api/art/:trackId', (req: Request, res: Response) => {
     if (fs.existsSync(artPath)) {
         res.set('Cache-Control', 'public, max-age=86400, immutable');
         res.set('ETag', `art-${req.params.trackId}`);
+        res.set('Access-Control-Allow-Origin', '*');
         res.sendFile(artPath);
         return;
     }
@@ -454,6 +456,7 @@ app.get('/api/art/:trackId', (req: Request, res: Response) => {
             if (files.length > 0) {
                 res.set('Cache-Control', 'public, max-age=86400, immutable');
                 res.set('ETag', `art-release-${track.release_mbid}`);
+                res.set('Access-Control-Allow-Origin', '*');
                 res.sendFile(path.join(artDir, files[0]));
                 return;
             }
@@ -531,6 +534,7 @@ app.get('/api/stream/:id', (req: Request, res: Response) => {
             'Accept-Ranges': 'bytes',
             'Content-Length': chunksize,
             'Content-Type': contentType,
+            'Access-Control-Allow-Origin': '*',
         };
         res.writeHead(206, head);
         file.pipe(res);
@@ -538,6 +542,7 @@ app.get('/api/stream/:id', (req: Request, res: Response) => {
         const head = {
             'Content-Length': fileSize,
             'Content-Type': contentType,
+            'Access-Control-Allow-Origin': '*',
         };
         res.writeHead(200, head);
         fs.createReadStream(filePath).pipe(res);
