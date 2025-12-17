@@ -26,6 +26,11 @@ export const getServerUrl = (): string => {
         return '';
     }
 
+    // Production web: use same-origin (empty string = relative API calls)
+    if (window.location.hostname !== 'localhost') {
+        return '';
+    }
+
     // For web development, localhost works fine
     return 'http://localhost:3001';
 };

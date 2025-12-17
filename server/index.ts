@@ -23,8 +23,8 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Root route for health check
-app.get('/', (req, res) => {
+// API health check endpoint
+app.get('/api/health', (req, res) => {
     res.send('OpenStream Server is Running!');
 });
 
@@ -3023,6 +3023,20 @@ app.post('/api/playlists/generate', auth.authenticateToken, (req: AuthRequest, r
         playlistName: save ? (name || `${templateDef.name} - ${new Date().toLocaleDateString()}`) : null
     });
 });
+
+// Serve static client files (React app)
+const clientPath = path.join(__dirname, 'public');
+if (fs.existsSync(clientPath)) {
+    app.use(express.static(clientPath));
+
+    // SPA fallback - serve index.html for any non-API routes
+    app.get('*', (req, res) => {
+        if (!req.path.startsWith('/api')) {
+            res.sendFile(path.join(clientPath, 'index.html'));
+        }
+    });
+    console.log('[Server] Serving React client from:', clientPath);
+}
 
 // Start Server
 app.listen(PORT, () => {

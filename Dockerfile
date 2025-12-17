@@ -1,6 +1,26 @@
 # OpenStream Music Streaming Server
 # Multi-stage build for smaller image
 
+# ===== Client Build Stage =====
+FROM node:20-slim AS client-builder
+
+WORKDIR /app/client
+
+# Copy client package files
+COPY client/package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy client source files
+COPY client/ ./
+COPY types ../types
+
+# Build with empty server URL (same-origin for production)
+ENV VITE_SERVER_URL=""
+RUN npm run build
+
+# ===== Server Build Stage =====
 FROM node:20-slim AS builder
 
 WORKDIR /app/server
@@ -11,6 +31,7 @@ RUN apt-get update && apt-get install -y \
     make \
     g++ \
     && rm -rf /var/lib/apt/lists/*
+
 
 # Copy server package files
 COPY server/package*.json ./
@@ -47,6 +68,9 @@ COPY --from=builder /app/types ../types
 COPY server/package*.json ./
 COPY server/scripts ./scripts
 
+# Copy built client for static serving
+COPY --from=client-builder /app/client/dist ./public
+
 # Create directories for persistent data
 RUN mkdir -p /data /music /app/server/storage/art
 
@@ -59,7 +83,7 @@ EXPOSE 3001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:3001/ || exit 1
+    CMD curl -f http://localhost:3001/api/health || exit 1
 
 # Install curl for healthcheck
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
