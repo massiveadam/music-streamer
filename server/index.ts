@@ -3030,9 +3030,12 @@ if (fs.existsSync(clientPath)) {
     app.use(express.static(clientPath));
 
     // SPA fallback - serve index.html for any non-API routes
-    app.get('*', (req, res) => {
-        if (!req.path.startsWith('/api')) {
+    // Use middleware instead of wildcard route for compatibility
+    app.use((req, res, next) => {
+        if (!req.path.startsWith('/api') && req.method === 'GET') {
             res.sendFile(path.join(clientPath, 'index.html'));
+        } else {
+            next();
         }
     });
     console.log('[Server] Serving React client from:', clientPath);
