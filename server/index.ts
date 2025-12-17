@@ -805,16 +805,19 @@ app.post('/api/clear', auth.authenticateToken, auth.requireAdmin, (req: AuthRequ
 
 // 5. Scan Library (Admin only)
 app.post('/api/scan', auth.authenticateToken, auth.requireAdmin, (req: AuthRequest, res: Response) => {
-    const { path: scanPath, limit } = req.body;
-    if (!scanPath) return res.status(400).json({ error: 'Missing path' });
+    // Use body path, query path, or fall back to MUSIC_LIBRARY_PATH env var
+    const scanPath = req.body?.path || req.query?.path || process.env.MUSIC_LIBRARY_PATH;
+    const limit = req.body?.limit || req.query?.limit;
+
+    if (!scanPath) return res.status(400).json({ error: 'Missing path - set MUSIC_LIBRARY_PATH env var or provide path parameter' });
 
     if (scanStatus.isScanning) return res.status(409).json({ error: 'Scan already in progress' });
 
-    const limitNum = parseInt(limit) || 0;
+    const limitNum = parseInt(limit as string) || 0;
     // Use the existing background scan function which handles state correctly
-    startBackgroundScan(scanPath, limitNum);
+    startBackgroundScan(scanPath as string, limitNum);
 
-    res.json({ message: 'Scan started' });
+    res.json({ message: 'Scan started', path: scanPath });
 });
 
 // 10. Start MusicBrainz Enrichment (Admin only)
