@@ -278,7 +278,7 @@ export async function getReleaseDetails(mbid: string): Promise<MBRelease | null>
     try {
         const release = await mbApi.lookup('release', mbid, [
             'artists',
-            'artist-rels',
+            'artist-rels', // Added for release-level credits
             'labels',
             'recordings',
             'release-groups',
@@ -927,6 +927,9 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
         ];
         const genreTag = allTags.find(t => t.name && t.name.length > 0)?.name || null;
 
+        // Clear existing credits to avoid duplicates during re-enrichment
+        db.prepare('DELETE FROM credits WHERE track_id = ?').run(track.id);
+
         // Update track with mbid, enriched flag, and genre
         db.prepare(`
             UPDATE tracks SET 
@@ -937,9 +940,11 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
         `).run(recording.id, genreTag, track.id);
 
         if (details.relations) storeCredits(track.id, details.relations);
-        if (details.tags) storeEntityTags('track', track.id, details.tags);
 
         if (releaseFull) {
+            // Apply release-level relations (credits) to track if available
+            if (releaseFull.relations) storeCredits(track.id, releaseFull.relations);
+
             // Use Wikipedia description if available, fallback to Last.fm
             releaseFull.description = wikiDescription || lfmDescription || undefined;
             const releaseId = upsertRelease(releaseFull);
@@ -1248,6 +1253,9 @@ export async function startAlbumEnrichment(workerCount: number = 3, forceReenric
 
                     // Update all tracks in this album with genre
                     for (const track of albumTracks) {
+                        // Clear existing credits to avoid duplicates during re-enrichment
+                        db.prepare('DELETE FROM credits WHERE track_id = ?').run(track.id);
+
                         db.prepare(`
                             UPDATE tracks SET 
                                 mbid = ?, 
@@ -1257,7 +1265,13 @@ export async function startAlbumEnrichment(workerCount: number = 3, forceReenric
                             WHERE id = ?
                         `).run(recordingId!, releaseFull?.id || null, genreTag, track.id);
 
+                        // Store recording-level credits
                         if (details.relations) storeCredits(track.id, details.relations);
+
+                        // Store release-level credits (applied to all tracks in album)
+                        if (releaseFull && releaseFull.relations) {
+                            storeCredits(track.id, releaseFull.relations);
+                        }
                     }
                 });
 
