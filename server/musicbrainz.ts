@@ -339,9 +339,13 @@ export async function getWorkDetails(mbid: string): Promise<MBWork | null> {
 /**
  * Store or update an artist in the database
  * Checks by name first to prevent duplicates, then by mbid
+ * Sets data_source tracking for metadata quality management
  */
 export function upsertArtist(artistData: MBArtist | null): number | null {
     if (!artistData || !artistData.name) return null;
+
+    const now = new Date().toISOString();
+    const dataSource = artistData.id ? 'musicbrainz' : 'manual';
 
     // First check by name to avoid duplicates
     const existingByName = db.prepare('SELECT id, mbid FROM artists WHERE name = ?').get(artistData.name) as { id: number; mbid: string | null } | undefined;
@@ -349,8 +353,19 @@ export function upsertArtist(artistData: MBArtist | null): number | null {
     if (existingByName) {
         // Update with new data if we have more info (like mbid or description)
         if (artistData.id && !existingByName.mbid) {
-            db.prepare(`UPDATE artists SET mbid = ?, sort_name = ?, disambiguation = ?, type = ?, country = ? WHERE id = ?`)
-                .run(artistData.id, artistData['sort-name'] || artistData.name, artistData.disambiguation || null, artistData.type || null, artistData.country || null, existingByName.id);
+            db.prepare(`UPDATE artists SET 
+                mbid = ?, sort_name = ?, disambiguation = ?, type = ?, country = ?,
+                data_source = ?, enriched_at = ?, enrichment_confidence = ?
+                WHERE id = ?`)
+                .run(
+                    artistData.id,
+                    artistData['sort-name'] || artistData.name,
+                    artistData.disambiguation || null,
+                    artistData.type || null,
+                    artistData.country || null,
+                    dataSource, now, 0.9,
+                    existingByName.id
+                );
         }
         return existingByName.id;
     }
@@ -361,17 +376,20 @@ export function upsertArtist(artistData: MBArtist | null): number | null {
         if (existingByMbid) return existingByMbid.id;
     }
 
-    // Insert new artist
+    // Insert new artist with data source tracking
     const result = db.prepare(`
-        INSERT INTO artists (mbid, name, sort_name, disambiguation, type, country)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO artists (mbid, name, sort_name, disambiguation, type, country, data_source, enriched_at, enrichment_confidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
         artistData.id || null,
         artistData.name,
         artistData['sort-name'] || artistData.name,
         artistData.disambiguation || null,
         artistData.type || null,
-        artistData.country || null
+        artistData.country || null,
+        dataSource,
+        now,
+        artistData.id ? 0.9 : 0.5 // Higher confidence for MBID-linked artists
     );
 
     return Number(result.lastInsertRowid);
@@ -582,40 +600,44 @@ function storeEntityTags(entityType: string, entityId: number | null, tags: MBTa
 }
 
 /**
- * Upsert Label
+ * Upsert Label with data source tracking
  */
 function upsertLabel(labelData: MBLabel): number | null {
     if (!labelData || !labelData.id) return null;
 
+    const now = new Date().toISOString();
     const existing = db.prepare('SELECT id FROM labels WHERE mbid = ?').get(labelData.id) as { id: number } | undefined;
     if (existing) return existing.id;
 
     const info = db.prepare(`
-    INSERT INTO labels (mbid, name, type, country, founded)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO labels (mbid, name, type, country, founded, data_source, enriched_at, enrichment_confidence)
+    VALUES (?, ?, ?, ?, ?, 'musicbrainz', ?, 0.9)
   `).run(
         labelData.id,
         labelData.name,
         labelData.type,
         labelData.country,
-        labelData['life-span']?.begin || null
+        labelData['life-span']?.begin || null,
+        now
     );
 
     return Number(info.lastInsertRowid);
 }
 
 /**
- * Upsert Release (Album)
+ * Upsert Release (Album) with data source tracking
  */
 function upsertRelease(releaseData: MBRelease): number | null {
     if (!releaseData || !releaseData.id) return null;
+
+    const now = new Date().toISOString();
 
     // Check if release exists
     const existing = db.prepare('SELECT id FROM releases WHERE mbid = ?').get(releaseData.id) as { id: number } | undefined;
 
     // Always update description if we have new data (for re-enrichment)
     if (existing && releaseData.description) {
-        db.prepare('UPDATE releases SET description = ? WHERE id = ?').run(releaseData.description, existing.id);
+        db.prepare('UPDATE releases SET description = ?, enriched_at = ? WHERE id = ?').run(releaseData.description, now, existing.id);
         return existing.id;
     } else if (existing) {
         return existing.id;
@@ -631,9 +653,9 @@ function upsertRelease(releaseData: MBRelease): number | null {
     }
 
     db.prepare(`
-    INSERT INTO releases (mbid, title, release_date, country, barcode, label_mbid, status, packaging, description, primary_type)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(mbid) DO UPDATE SET description = excluded.description, primary_type = COALESCE(excluded.primary_type, releases.primary_type)
+    INSERT INTO releases (mbid, title, release_date, country, barcode, label_mbid, status, packaging, description, primary_type, data_source, enriched_at, enrichment_confidence)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'musicbrainz', ?, 0.9)
+    ON CONFLICT(mbid) DO UPDATE SET description = excluded.description, primary_type = COALESCE(excluded.primary_type, releases.primary_type), enriched_at = excluded.enriched_at
   `).run(
         releaseData.id,
         releaseData.title,
@@ -644,7 +666,8 @@ function upsertRelease(releaseData: MBRelease): number | null {
         releaseData.status,
         releaseData.packaging,
         releaseData.description || null,
-        releaseData['release-group']?.['primary-type'] || null
+        releaseData['release-group']?.['primary-type'] || null,
+        now
     );
 
     // Re-query to get correct ID (lastInsertRowid is unreliable with ON CONFLICT DO UPDATE)
