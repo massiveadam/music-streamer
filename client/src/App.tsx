@@ -1,5 +1,6 @@
 import { SERVER_URL, isServerConfigured, getServerUrl } from './config';
 import { useMediaSession, updatePositionState } from './hooks/useMediaSession';
+import { useSessionPersistence } from './hooks/useSessionPersistence';
 import { useState, useEffect, useRef, useMemo, useCallback, ChangeEvent, MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import axios, { AxiosResponse } from 'axios';
 import { Play, Pause, SkipForward, SkipBack, Volume2, Sliders, Disc, Search, Settings, X, Clock, Calendar, Hash, PlusCircle, RefreshCcw, Home, Library, Sparkles, ListMusic, Shuffle, Repeat, Repeat1, LayoutGrid, List, Plus, RefreshCw, LogOut } from 'lucide-react';
@@ -537,6 +538,34 @@ function MusicPlayer() {
       if (currentTrackIndex < tracks.length - 1) playTrack(currentTrackIndex + 1, 'crossfade');
     }, [currentTrackIndex, tracks.length, playTrack]),
   });
+
+  // Session persistence for resume on app reopen
+  const handleSessionRestore = useCallback((trackIndex: number, position: number) => {
+    playTrack(trackIndex, 'cut');
+    // Seek to position after a short delay to let audio load
+    setTimeout(() => {
+      const audio = activeDeck === 'A' ? audioRefB.current : audioRefA.current; // playTrack switches decks
+      if (audio) {
+        audio.currentTime = position;
+      }
+    }, 500);
+  }, [playTrack, activeDeck]);
+
+  const { hasSession, sessionInfo, restoreSession, dismissSession } = useSessionPersistence({
+    tracks,
+    currentTrackIndex,
+    currentTime,
+    isPlaying,
+    onRestore: handleSessionRestore,
+  });
+
+  // State to track if resume prompt was shown
+  const [showResumePrompt, setShowResumePrompt] = useState(false);
+  useEffect(() => {
+    if (hasSession && !isLoading && tracks.length > 0 && currentTrackIndex === -1) {
+      setShowResumePrompt(true);
+    }
+  }, [hasSession, isLoading, tracks.length, currentTrackIndex]);
 
   // Monitor Track End for Auto-Crossfade
   const handleTrackEnd = () => {
@@ -1263,6 +1292,54 @@ function MusicPlayer() {
           />
         </div>
 
+
+        {/* Resume Playback Prompt */}
+        {showResumePrompt && sessionInfo && (
+          <div className="fixed bottom-24 md:bottom-28 left-4 right-4 md:left-auto md:right-6 md:w-96 z-50 animate-in slide-in-from-bottom duration-300">
+            <div className="bg-gradient-to-r from-cyan-600/90 to-blue-600/90 backdrop-blur-xl rounded-2xl p-4 shadow-2xl border border-white/20">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-lg overflow-hidden bg-white/10 flex-shrink-0">
+                  {sessionInfo.track.has_art ? (
+                    <img
+                      src={`${getServerUrl()}/api/art/${sessionInfo.track.id}`}
+                      alt=""
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <Disc size={20} className="text-white/50" />
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-white/70 text-xs mb-0.5">Continue where you left off?</p>
+                  <p className="text-white font-medium truncate text-sm">{sessionInfo.track.title}</p>
+                  <p className="text-white/60 text-xs truncate">{sessionInfo.track.artist}</p>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={() => {
+                    restoreSession();
+                    setShowResumePrompt(false);
+                  }}
+                  className="flex-1 bg-white text-blue-600 font-medium py-2 rounded-lg text-sm hover:bg-white/90 transition-colors flex items-center justify-center gap-1"
+                >
+                  <Play size={14} fill="currentColor" /> Resume
+                </button>
+                <button
+                  onClick={() => {
+                    dismissSession();
+                    setShowResumePrompt(false);
+                  }}
+                  className="flex-1 bg-white/20 text-white font-medium py-2 rounded-lg text-sm hover:bg-white/30 transition-colors"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Detail View Overlay - Dark Theme */}
         {
