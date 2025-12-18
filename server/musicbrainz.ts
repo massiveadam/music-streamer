@@ -1045,25 +1045,32 @@ export function getEnrichmentStatus(): EnrichmentStatus {
  * Album-based enrichment - groups tracks by album and uses parallel workers
  * This is ~10x faster than per-track enrichment
  */
-export async function startAlbumEnrichment(workerCount: number = 3): Promise<{ error?: string; message?: string; processed?: number; errors?: number; albumsProcessed?: number }> {
+export async function startAlbumEnrichment(workerCount: number = 3, forceReenrich: boolean = false): Promise<{ error?: string; message?: string; processed?: number; errors?: number; albumsProcessed?: number }> {
     if (enrichmentStatus.isEnriching) {
         return { error: 'Enrichment already in progress' };
     }
 
-    // Get all unenriched tracks grouped by album
+    // Get tracks to enrich - either unenriched only, or all tracks if force=true
     // OPTIMIZATION: Prioritize albums with art (more likely to be complete/high-quality)
-    const tracks = db.prepare(`
-        SELECT * FROM tracks 
-        WHERE enriched IS NULL OR enriched = 0 
-        ORDER BY 
+    const query = forceReenrich
+        ? `SELECT * FROM tracks ORDER BY 
             CASE WHEN has_art = 1 THEN 0 ELSE 1 END,
             CASE WHEN genre IS NOT NULL THEN 0 ELSE 1 END,
-            album, artist
-    `).all() as Track[];
+            album, artist`
+        : `SELECT * FROM tracks 
+            WHERE enriched IS NULL OR enriched = 0 
+            ORDER BY 
+                CASE WHEN has_art = 1 THEN 0 ELSE 1 END,
+                CASE WHEN genre IS NOT NULL THEN 0 ELSE 1 END,
+                album, artist`;
+
+    const tracks = db.prepare(query).all() as Track[];
 
     if (tracks.length === 0) {
-        return { message: 'All tracks already enriched' };
+        return { message: forceReenrich ? 'No tracks found' : 'All tracks already enriched' };
     }
+
+    console.log(`[Enrichment] Starting ${forceReenrich ? 'FORCE ' : ''}album-based enrichment for ${tracks.length} tracks...`);
 
     // Group tracks by album+artist key
     const albumGroups = new Map<string, Track[]>();

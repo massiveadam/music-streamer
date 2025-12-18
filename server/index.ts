@@ -826,6 +826,7 @@ app.post('/api/scan', auth.authenticateToken, auth.requireAdmin, (req: AuthReque
 app.post('/api/enrich', auth.authenticateToken, auth.requireAdmin, async (req: AuthRequest, res: Response) => {
     const mode = (req.body?.mode as string) || 'albums'; // Default to album-based (faster)
     const workers = parseInt(req.body?.workers as string) || 3;
+    const force = req.body?.force === true; // Force re-enrichment of all tracks
 
     switch (mode) {
         case 'tracks':
@@ -835,8 +836,8 @@ app.post('/api/enrich', auth.authenticateToken, auth.requireAdmin, async (req: A
             break;
         case 'albums':
             // Fast album-based enrichment (recommended)
-            musicbrainz.startAlbumEnrichment(workers);
-            res.json({ message: `Album-based enrichment started with ${workers} workers`, mode });
+            musicbrainz.startAlbumEnrichment(workers, force);
+            res.json({ message: `Album-based enrichment started with ${workers} workers${force ? ' (FORCE ALL)' : ''}`, mode, force });
             break;
         case 'artists':
             // Artist bio enrichment - handled below
@@ -850,8 +851,16 @@ app.post('/api/enrich', auth.authenticateToken, auth.requireAdmin, async (req: A
 // 10a. Fast album-based enrichment (Admin only) - kept for backwards compatibility
 app.post('/api/enrich/fast', auth.authenticateToken, auth.requireAdmin, async (req: AuthRequest, res: Response) => {
     const workerCount = parseInt(req.body?.workers as string) || 3;
-    musicbrainz.startAlbumEnrichment(workerCount);
-    res.json({ message: `Fast album-based enrichment started with ${workerCount} workers` });
+    const force = req.body?.force === true;
+    musicbrainz.startAlbumEnrichment(workerCount, force);
+    res.json({ message: `Fast album-based enrichment started with ${workerCount} workers${force ? ' (FORCE ALL)' : ''}` });
+});
+
+// 10b. Force re-enrich all albums (Admin only) - re-processes ALL tracks regardless of enriched status
+app.post('/api/enrich/all', auth.authenticateToken, auth.requireAdmin, async (req: AuthRequest, res: Response) => {
+    const workerCount = parseInt(req.body?.workers as string) || 3;
+    musicbrainz.startAlbumEnrichment(workerCount, true); // Force = true
+    res.json({ message: `Force re-enriching ALL albums with ${workerCount} workers` });
 });
 
 

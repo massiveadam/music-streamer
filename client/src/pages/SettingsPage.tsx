@@ -714,13 +714,40 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                                             </div>
                                         </div>
                                     ) : (
-                                        <button
-                                            onClick={handleEnrichment}
-                                            className="bg-transparent border border-white/20 hover:bg-white/10 text-white rounded-lg px-5 py-2.5 font-medium transition-colors text-sm"
-                                        >
-                                            <RefreshCcw size={14} className="inline mr-2" />
-                                            Enrich Albums
-                                        </button>
+                                        <div className="flex flex-col gap-2">
+                                            <div className="flex gap-3">
+                                                <button
+                                                    onClick={handleEnrichment}
+                                                    className="bg-transparent border border-white/20 hover:bg-white/10 text-white rounded-lg px-5 py-2.5 font-medium transition-colors text-sm"
+                                                >
+                                                    <RefreshCcw size={14} className="inline mr-2" />
+                                                    Enrich New Albums
+                                                </button>
+                                                <button
+                                                    onClick={async () => {
+                                                        try {
+                                                            await axios.post(`${getServerUrl()}/api/enrich/all`, { workers: 3 }, {
+                                                                headers: { Authorization: `Bearer ${token}` }
+                                                            });
+                                                            setTimeout(pollEnrichmentStatus, 500);
+                                                        } catch (e: any) {
+                                                            if (e.response?.status === 409) {
+                                                                alert('Enrichment already in progress');
+                                                            } else {
+                                                                alert('Failed: ' + (e.response?.data?.error || e.message));
+                                                            }
+                                                        }
+                                                    }}
+                                                    className="bg-amber-600/20 border border-amber-500/30 hover:bg-amber-600/30 text-amber-400 rounded-lg px-5 py-2.5 font-medium transition-colors text-sm"
+                                                >
+                                                    <RefreshCcw size={14} className="inline mr-2" />
+                                                    Re-enrich All
+                                                </button>
+                                            </div>
+                                            <p className="text-xs text-app-text-muted">
+                                                <strong>Enrich New:</strong> Only unenriched albums. <strong>Re-enrich All:</strong> Re-fetches tags for all albums.
+                                            </p>
+                                        </div>
                                     )}
                                 </div>
 
