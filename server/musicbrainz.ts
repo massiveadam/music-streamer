@@ -32,6 +32,7 @@ interface MBRelease {
     packaging?: string;
     'label-info'?: { label?: MBLabel; 'catalog-number'?: string }[];
     'release-group'?: { 'primary-type'?: string };
+    relations?: MBRelation[]; // Added to fix TS errors
     tags?: MBTag[];
     description?: string;
 }
@@ -59,7 +60,7 @@ interface MBRelation {
     type: string;
     artist?: MBArtist;
     attributes?: string[];
-    'attribute-values'?: Record<string, string>;
+    'attribute-values'?: any[]; // Changed from Record to match API fallback
 }
 
 interface MBArtistCredit {
@@ -285,7 +286,7 @@ export async function getReleaseDetails(mbid: string): Promise<MBRelease | null>
             'tags',
             'genres'
         ]);
-        return release as MBRelease;
+        return release as unknown as MBRelease;
     } catch (err) {
         console.error(`Failed to get release details for ${mbid}:`, (err as Error).message);
         return null;
@@ -502,7 +503,7 @@ function storeCredits(trackId: number, relations: MBRelation[]): void {
                 }
             }
 
-            if (rel['attribute-values']) {
+            if (rel['attribute-values'] && rel['attribute-values'].length > 0) {
                 attributes = JSON.stringify(rel['attribute-values']);
             }
 
