@@ -166,14 +166,31 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
         const limitElement = document.getElementById('settingsScanLimit') as HTMLInputElement;
         const path = pathElement?.value;
         const limit = parseInt(limitElement?.value) || 0;
-        if (path) {
-            try {
-                await axios.post(`${getServerUrl()}/api/clear`);
-                await axios.post(`${getServerUrl()}/api/scan`, { path, limit });
-                setShowScanOverlay(true);
-            } catch (e) {
-                alert("Scan failed: " + (e as Error).message);
-            }
+
+        if (!path) {
+            alert("Please enter a music directory path.");
+            return;
+        }
+
+        // Confirmation dialog to prevent accidental library clear
+        const confirmed = window.confirm(
+            "⚠️ Warning: This will CLEAR your entire library and re-import from scratch.\n\n" +
+            "All existing tracks, metadata, and enrichment data will be deleted.\n\n" +
+            `Path: ${path}\n` +
+            `Limit: ${limit || 'Unlimited'}\n\n` +
+            "Are you sure you want to continue?"
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            await axios.post(`${getServerUrl()}/api/clear`);
+            await axios.post(`${getServerUrl()}/api/scan`, { path, limit });
+            setShowScanOverlay(true);
+        } catch (e) {
+            alert("Scan failed: " + (e as Error).message);
         }
     };
 
@@ -623,17 +640,52 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                                     </div>
                                 </div>
                             ) : (
-                                <div className="flex gap-4">
-                                    <button
-                                        onClick={async () => {
-                                            await handleRescan();
-                                            setTimeout(pollScanStatus, 500);
-                                        }}
-                                        className="flex-1 bg-transparent border border-white/20 hover:bg-white/10 text-white rounded-lg py-3 font-medium transition-colors"
-                                    >
-                                        <RefreshCcw size={16} className="inline mr-2" />
-                                        Rescan Library
-                                    </button>
+                                <div className="flex flex-col gap-3">
+                                    <div className="flex gap-3">
+                                        <button
+                                            onClick={async () => {
+                                                const pathElement = document.getElementById('settingsScanPath') as HTMLInputElement;
+                                                const limitElement = document.getElementById('settingsScanLimit') as HTMLInputElement;
+                                                const path = pathElement?.value;
+                                                const limit = parseInt(limitElement?.value) || 0;
+
+                                                if (!path) {
+                                                    alert("Please enter a music directory path.");
+                                                    return;
+                                                }
+
+                                                try {
+                                                    await axios.post(`${getServerUrl()}/api/scan`, { path, limit });
+                                                    setShowScanOverlay(true);
+                                                    setTimeout(pollScanStatus, 500);
+                                                } catch (e: any) {
+                                                    if (e.response?.status === 409) {
+                                                        alert("A scan is already in progress.");
+                                                    } else {
+                                                        alert("Scan failed: " + (e.response?.data?.error || e.message));
+                                                    }
+                                                }
+                                            }}
+                                            className="flex-1 bg-green-600/20 border border-green-500/30 hover:bg-green-600/30 text-green-400 rounded-lg py-3 font-medium transition-colors"
+                                        >
+                                            <RefreshCcw size={16} className="inline mr-2" />
+                                            Scan New Files
+                                        </button>
+                                        <button
+                                            onClick={async () => {
+                                                await handleRescan();
+                                                setTimeout(pollScanStatus, 500);
+                                            }}
+                                            className="flex-1 bg-red-600/10 border border-red-500/20 hover:bg-red-600/20 text-red-400 rounded-lg py-3 font-medium transition-colors"
+                                        >
+                                            <Trash2 size={16} className="inline mr-2" />
+                                            Clear & Rescan
+                                        </button>
+                                    </div>
+                                    <p className="text-xs text-app-text-muted">
+                                        <strong>Scan New Files:</strong> Adds new tracks without removing existing ones.<br />
+                                        <strong>Clear & Rescan:</strong> Deletes everything and imports from scratch.
+                                    </p>
                                 </div>
                             )}
                         </div>

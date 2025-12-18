@@ -18,6 +18,7 @@
     "@capacitor/app": "^8.0.0",
     "@capacitor/cli": "^8.0.0",
     "@capacitor/core": "^8.0.0",
+    "@jofr/capacitor-media-session": "^4.0.0",
     "@tailwindcss/postcss": "^4.1.17",
     "@tanstack/react-virtual": "^3.13.13",
     "autoprefixer": "^10.4.22",

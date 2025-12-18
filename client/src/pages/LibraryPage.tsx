@@ -64,8 +64,9 @@ export default function LibraryPage({
     const toolbarBg = useTransform(scrollY, [0, 50], ['rgba(10, 10, 10, 0.4)', 'rgba(10, 10, 10, 0.8)']);
     const toolbarBorderRadius = useTransform(scrollY, [0, 50], ['12px', '0px']);
     // Use smaller negative margins on mobile to prevent overflow
-    const toolbarMarginX = useTransform(scrollY, [0, 50], ['0px', '-12px']);
-    const toolbarMarginBottom = useTransform(scrollY, [0, 50], ['24px', '16px']);
+    const toolbarMarginX = useTransform(scrollY, [0, 50], ['0px', '-24px']);
+    const toolbarMarginTop = useTransform(scrollY, [0, 50], ['0px', '0px']);
+    const toolbarMarginBottom = useTransform(scrollY, [0, 50], ['16px', '8px']);
     const toolbarPaddingX = useTransform(scrollY, [0, 50], ['12px', '16px']);
     const toolbarBorderColor = useTransform(scrollY, [0, 50], ['rgba(255, 255, 255, 0.1)', 'rgba(255, 255, 255, 0.15)']);
     const toolbarShadow = useTransform(scrollY, [0, 50], ['0 10px 20px rgba(0, 0, 0, 0.1)', '0 20px 40px rgba(0, 0, 0, 0.3)']);
@@ -73,7 +74,7 @@ export default function LibraryPage({
     return (
         <>
             {/* Header */}
-            <div className="min-h-[3.5rem] md:h-16 border-b border-app-surface flex flex-row items-center px-3 md:px-6 py-2 md:py-0 gap-3 md:gap-6 shrink-0 z-20 bg-app-bg/95 backdrop-blur safe-area-inset-top">
+            <div className="min-h-[3.5rem] md:min-h-[4rem] border-b border-app-surface flex flex-row items-center px-3 md:px-6 py-3 gap-3 md:gap-6 shrink-0 z-20 bg-app-bg/95 backdrop-blur safe-area-inset-top">
                 <div className="flex-1 w-full md:max-w-xl relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-app-text-muted" size={18} />
                     <input
@@ -117,7 +118,7 @@ export default function LibraryPage({
                 ) : (
                     <>
                         {/* View Toggle Controls - Scroll-driven animation into header bar */}
-                        <div className="sticky top-0 z-30 overflow-hidden">
+                        <div className="sticky top-0 z-30">
                             <motion.div
                                 className="flex items-center justify-between backdrop-blur-xl border supports-[backdrop-filter]:bg-app-bg/60 py-2 md:py-3"
                                 style={{
