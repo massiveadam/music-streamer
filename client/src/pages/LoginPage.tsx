@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
-import { Music, User, Lock, ArrowRight, Loader } from 'lucide-react';
-import { SERVER_URL, getServerUrl } from '../config';
+import { Music, User, Lock, ArrowRight, Loader, Server } from 'lucide-react';
+import { SERVER_URL, getServerUrl, clearServerConfig } from '../config';
 
 export default function LoginPage() {
     const { login } = useAuth();
@@ -161,6 +161,20 @@ export default function LoginPage() {
                         </p>
                     </div>
                 )}
+
+                {/* Change Server Button */}
+                <div className="mt-6 pt-6 border-t border-white/10 text-center">
+                    <button
+                        onClick={() => {
+                            clearServerConfig();
+                            window.location.reload();
+                        }}
+                        className="text-white/40 hover:text-white/70 text-sm flex items-center justify-center gap-2 mx-auto transition-colors"
+                    >
+                        <Server className="w-4 h-4" />
+                        Change Server
+                    </button>
+                </div>
             </div>
         </div>
     );
