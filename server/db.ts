@@ -73,6 +73,11 @@ addColumn('tracks', 'danceability', 'REAL');
 addColumn('tracks', 'valence', 'REAL');
 addColumn('tracks', 'analyzed_at', 'TEXT');
 
+// Loudness normalization columns (EBU R128)
+addColumn('tracks', 'loudness_lufs', 'REAL');      // Integrated loudness in LUFS
+addColumn('tracks', 'loudness_range', 'REAL');     // Loudness range in LU
+addColumn('tracks', 'true_peak', 'REAL');          // True peak in dBTP
+
 // MusicBrainz columns for tracks
 addColumn('tracks', 'mbid', 'TEXT');
 addColumn('tracks', 'release_mbid', 'TEXT');

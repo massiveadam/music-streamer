@@ -29,6 +29,7 @@ interface Deck {
     element: HTMLAudioElement | null;
     source: MediaElementAudioSourceNode | null;
     gain: GainNode | null;
+    loudnessGain: GainNode | null;  // Per-track loudness normalization
 }
 
 interface BiquadCoefficients {
@@ -119,8 +120,8 @@ class AudioEngine {
 
     // Dual Decks for gapless/crossfade playback
     decks: Record<DeckId, Deck> = {
-        A: { element: null, source: null, gain: null },
-        B: { element: null, source: null, gain: null }
+        A: { element: null, source: null, gain: null, loudnessGain: null },
+        B: { element: null, source: null, gain: null, loudnessGain: null }
     };
 
     // Signal Chain Nodes
@@ -128,6 +129,10 @@ class AudioEngine {
     masterGain: GainNode | null = null;
     limiter: DynamicsCompressorNode | null = null;
     filters: (BiquadFilterNode | IIRFilterNode)[] = [];
+
+    // Loudness Normalization
+    targetLufs: number = -14;  // Streaming standard (Spotify, Apple Music)
+    loudnessEnabled: boolean = true;
 
     // State
     isInitialized: boolean = false;
@@ -207,12 +212,15 @@ class AudioEngine {
         deck.element = element;
         deck.source = this.audioCtx!.createMediaElementSource(element);
         deck.gain = this.audioCtx!.createGain();
+        deck.loudnessGain = this.audioCtx!.createGain();  // Loudness normalization gain
 
         // Initial State
         deck.gain.gain.value = id === 'A' ? 1 : 0;
+        deck.loudnessGain.gain.value = 1;  // Unity gain until track loudness is set
 
-        // Route Deck -> DeckGain -> Preamp (start of EQ chain)
-        deck.source.connect(deck.gain);
+        // Route Deck -> LoudnessGain -> DeckGain -> Preamp (start of EQ chain)
+        deck.source.connect(deck.loudnessGain);
+        deck.loudnessGain.connect(deck.gain);
         deck.gain.connect(this.preampGain!);
     }
 
@@ -220,6 +228,71 @@ class AudioEngine {
         if (this.audioCtx && this.audioCtx.state === 'suspended') {
             this.audioCtx.resume();
         }
+    }
+
+    // ========== LOUDNESS NORMALIZATION ==========
+
+    /**
+     * Set the loudness gain for a specific deck based on track's LUFS measurement
+     * 
+     * @param deckId Which deck to set loudness for
+     * @param trackLufs The track's integrated loudness in LUFS (from server analysis)
+     */
+    setTrackLoudness(deckId: DeckId, trackLufs: number | null | undefined): void {
+        const deck = this.decks[deckId];
+        if (!deck.loudnessGain) return;
+
+        if (!this.loudnessEnabled || trackLufs === null || trackLufs === undefined) {
+            // No loudness data or disabled - use unity gain
+            deck.loudnessGain.gain.value = 1;
+            return;
+        }
+
+        // Calculate gain needed to bring track to target loudness
+        // If track is -20 LUFS and target is -14 LUFS, need +6 dB gain
+        const gainDb = this.targetLufs - trackLufs;
+
+        // Clamp to reasonable range (-12 to +12 dB) to prevent extreme adjustments
+        const clampedGainDb = Math.max(-12, Math.min(12, gainDb));
+
+        // Convert dB to linear gain
+        const linearGain = Math.pow(10, clampedGainDb / 20);
+
+        deck.loudnessGain.gain.value = linearGain;
+        console.log(`[AudioEngine] Track loudness: ${trackLufs} LUFS → gain: ${clampedGainDb.toFixed(1)} dB (${linearGain.toFixed(3)})`);
+    }
+
+    /**
+     * Enable or disable loudness normalization
+     */
+    setLoudnessEnabled(enabled: boolean): void {
+        this.loudnessEnabled = enabled;
+        // Reset gains if disabled
+        if (!enabled) {
+            Object.values(this.decks).forEach(deck => {
+                if (deck.loudnessGain) {
+                    deck.loudnessGain.gain.value = 1;
+                }
+            });
+        }
+        this.notifyListeners();
+    }
+
+    /**
+     * Set target loudness level for normalization
+     * Common values: -14 LUFS (Spotify), -16 LUFS (Apple), -23 LUFS (EBU broadcast)
+     */
+    setTargetLufs(lufs: number): void {
+        this.targetLufs = lufs;
+        this.notifyListeners();
+    }
+
+    getLoudnessEnabled(): boolean {
+        return this.loudnessEnabled;
+    }
+
+    getTargetLufs(): number {
+        return this.targetLufs;
     }
 
     // ========== CROSSFADE ==========

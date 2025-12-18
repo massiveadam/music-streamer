@@ -13,6 +13,7 @@ import * as wikipedia from './wikipedia';
 import * as auth from './auth';
 import type { AuthRequest } from './auth';
 import * as audioAnalyzer from './audioAnalyzer';
+import * as loudnessAnalyzer from './loudnessAnalyzer';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -938,6 +939,82 @@ app.post('/api/enrich/artists', auth.authenticateToken, auth.requireAdmin, async
 // 11. Get Enrichment Status
 app.get('/api/enrich/status', (_req: Request, res: Response) => {
     res.json(musicbrainz.getEnrichmentStatus());
+});
+
+// ========== LOUDNESS ANALYSIS ==========
+let loudnessAnalysisStatus = {
+    running: false,
+    processed: 0,
+    total: 0,
+    current: ''
+};
+
+app.post('/api/analyze/loudness', auth.authenticateToken, auth.requireAdmin, async (_req: AuthRequest, res: Response) => {
+    if (loudnessAnalysisStatus.running) {
+        return res.status(409).json({ error: 'Loudness analysis already running' });
+    }
+
+    // Get tracks without loudness data
+    const tracksToAnalyze = db.prepare(`
+        SELECT id, path, title, artist FROM tracks 
+        WHERE loudness_lufs IS NULL 
+        ORDER BY id
+    `).all() as { id: number; path: string; title: string; artist: string }[];
+
+    if (tracksToAnalyze.length === 0) {
+        return res.json({ message: 'All tracks already have loudness data' });
+    }
+
+    loudnessAnalysisStatus = {
+        running: true,
+        processed: 0,
+        total: tracksToAnalyze.length,
+        current: ''
+    };
+
+    res.json({
+        message: 'Loudness analysis started',
+        total: tracksToAnalyze.length
+    });
+
+    // Run analysis in background
+    (async () => {
+        const updateStmt = db.prepare(`
+            UPDATE tracks 
+            SET loudness_lufs = ?, loudness_range = ?, true_peak = ? 
+            WHERE id = ?
+        `);
+
+        for (const track of tracksToAnalyze) {
+            try {
+                loudnessAnalysisStatus.current = `${track.artist} - ${track.title}`;
+
+                const loudness = await loudnessAnalyzer.analyzeLoudness(track.path);
+
+                if (loudness) {
+                    updateStmt.run(
+                        loudness.integratedLoudness,
+                        loudness.loudnessRange,
+                        loudness.truePeak,
+                        track.id
+                    );
+                }
+
+                loudnessAnalysisStatus.processed++;
+            } catch (error) {
+                console.error(`[Loudness] Error analyzing ${track.path}:`, error);
+                loudnessAnalysisStatus.processed++;
+            }
+        }
+
+        loudnessAnalysisStatus.running = false;
+        loudnessAnalysisStatus.current = '';
+        console.log(`[Loudness] Analysis complete: ${loudnessAnalysisStatus.processed} tracks`);
+    })();
+});
+
+app.get('/api/analyze/loudness/status', (_req: Request, res: Response) => {
+    res.json(loudnessAnalysisStatus);
 });
 
 // 12. Get Artist Details (supports both MBID and name)

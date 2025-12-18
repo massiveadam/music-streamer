@@ -13,6 +13,7 @@
     "cap:build": "npm run build && npx cap sync"
   },
   "dependencies": {
+    "@capacitor-community/native-audio": "^7.0.1",
     "@capacitor/android": "^8.0.0",
     "@capacitor/app": "^8.0.0",
     "@capacitor/cli": "^8.0.0",
