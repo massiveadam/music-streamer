@@ -59,13 +59,14 @@ export default function LibraryPage({
     const scrollContainerRef = useRef<HTMLDivElement>(null);
     const { scrollY } = useScroll({ container: scrollContainerRef });
 
-    // Transform values for toolbar animation
+    // Transform values for toolbar animation (reduced margins for mobile)
     const toolbarY = useTransform(scrollY, [0, 50], [0, -25]);
     const toolbarBg = useTransform(scrollY, [0, 50], ['rgba(10, 10, 10, 0.4)', 'rgba(10, 10, 10, 0.8)']);
     const toolbarBorderRadius = useTransform(scrollY, [0, 50], ['12px', '0px']);
-    const toolbarMarginX = useTransform(scrollY, [0, 50], ['0px', '-24px']);
+    // Use smaller negative margins on mobile to prevent overflow
+    const toolbarMarginX = useTransform(scrollY, [0, 50], ['0px', '-12px']);
     const toolbarMarginBottom = useTransform(scrollY, [0, 50], ['24px', '16px']);
-    const toolbarPaddingX = useTransform(scrollY, [0, 50], ['16px', '24px']);
+    const toolbarPaddingX = useTransform(scrollY, [0, 50], ['12px', '16px']);
     const toolbarBorderColor = useTransform(scrollY, [0, 50], ['rgba(255, 255, 255, 0.1)', 'rgba(255, 255, 255, 0.15)']);
     const toolbarShadow = useTransform(scrollY, [0, 50], ['0 10px 20px rgba(0, 0, 0, 0.1)', '0 20px 40px rgba(0, 0, 0, 0.3)']);
 
@@ -116,7 +117,7 @@ export default function LibraryPage({
                 ) : (
                     <>
                         {/* View Toggle Controls - Scroll-driven animation into header bar */}
-                        <div className="sticky top-0 z-30">
+                        <div className="sticky top-0 z-30 overflow-hidden">
                             <motion.div
                                 className="flex items-center justify-between backdrop-blur-xl border supports-[backdrop-filter]:bg-app-bg/60 py-2 md:py-3"
                                 style={{
