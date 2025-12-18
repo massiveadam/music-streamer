@@ -9,8 +9,8 @@ WORKDIR /app/client
 # Copy client package files
 COPY client/package*.json ./
 
-# Install dependencies
-RUN npm ci
+# Install dependencies (legacy-peer-deps needed for Capacitor version mismatches)
+RUN npm ci --legacy-peer-deps
 
 # Copy client source files
 COPY client/ ./
