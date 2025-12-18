@@ -59,8 +59,16 @@ interface MBLabel {
 interface MBRelation {
     type: string;
     artist?: MBArtist;
+    work?: MBWork; // For work-rels on recordings
     attributes?: string[];
     'attribute-values'?: any[]; // Changed from Record to match API fallback
+}
+
+interface MBWork {
+    id: string;
+    title: string;
+    type?: string;
+    relations?: MBRelation[];
 }
 
 interface MBArtistCredit {
@@ -308,6 +316,22 @@ export async function getArtistDetails(mbid: string): Promise<MBArtist | null> {
         return artist as MBArtist;
     } catch (err) {
         console.error(`Failed to get artist details for ${mbid}:`, (err as Error).message);
+        return null;
+    }
+}
+
+/**
+ * Get work details including artist-rels (writers, composers)
+ * Works contain the composition credits that recordings often lack
+ */
+export async function getWorkDetails(mbid: string): Promise<MBWork | null> {
+    try {
+        const work = await mbApi.lookup('work', mbid, [
+            'artist-rels'
+        ]);
+        return work as unknown as MBWork;
+    } catch (err) {
+        console.error(`Failed to get work details for ${mbid}:`, (err as Error).message);
         return null;
     }
 }
@@ -866,6 +890,19 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
     const details = await getRecordingDetails(recording.id);
     if (!details) return { success: false, reason: 'Failed to fetch details' };
 
+    // Fetch work-level credits (writers/composers are usually on works, not recordings)
+    let workCredits: MBRelation[] = [];
+    if (details.relations) {
+        // Find work-rels in the recording's relations
+        const workRels = details.relations.filter((r: any) => r.work?.id);
+        for (const workRel of workRels.slice(0, 2)) { // Limit to first 2 works to avoid rate limits
+            const work = await getWorkDetails((workRel as any).work.id);
+            if (work?.relations) {
+                workCredits.push(...work.relations);
+            }
+        }
+    }
+
     let matchedRelease: MBRelease | null = null;
     let releaseFull: MBRelease | null = null;
 
@@ -940,7 +977,11 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
             WHERE id = ?
         `).run(recording.id, genreTag, track.id);
 
+        // Store recording-level credits (performers, etc.)
         if (details.relations) storeCredits(track.id, details.relations);
+
+        // Store work-level credits (writers, composers - often missing from recordings)
+        if (workCredits.length > 0) storeCredits(track.id, workCredits);
 
         if (releaseFull) {
             // Apply release-level relations (credits) to track if available
@@ -1212,6 +1253,18 @@ export async function startAlbumEnrichment(workerCount: number = 3, forceReenric
                     }
                 }
 
+                // Fetch work-level credits (writers/composers are on works, not recordings)
+                let workCredits: MBRelation[] = [];
+                if (details.relations) {
+                    const workRels = (details.relations as any[]).filter((r: any) => r.work?.id);
+                    for (const workRel of workRels.slice(0, 2)) { // Limit to avoid rate limits
+                        const work = await rateLimitedRequest(() => getWorkDetails(workRel.work.id));
+                        if (work?.relations) {
+                            workCredits.push(...work.relations);
+                        }
+                    }
+                }
+
                 // Await Last.fm Parallel Requests
                 let lfmArtistBio: { bio: string, image: string } | null = null;
                 const lfmInfo = await lfmArtistPromise;
@@ -1272,6 +1325,11 @@ export async function startAlbumEnrichment(workerCount: number = 3, forceReenric
                         // Store release-level credits (applied to all tracks in album)
                         if (releaseFull && releaseFull.relations) {
                             storeCredits(track.id, releaseFull.relations);
+                        }
+
+                        // Store work-level credits (writers, composers - often missing from recordings)
+                        if (workCredits.length > 0) {
+                            storeCredits(track.id, workCredits);
                         }
                     }
                 });
