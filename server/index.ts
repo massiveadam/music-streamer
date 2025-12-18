@@ -867,89 +867,95 @@ let artistEnrichmentStatus = {
 
 // 10b. Bulk enrich artist bios (Admin only) - Background process
 app.post('/api/enrich/artists', auth.authenticateToken, auth.requireAdmin, async (_req: AuthRequest, res: Response) => {
-    if (artistEnrichmentStatus.running) {
-        return res.status(409).json({ error: 'Artist enrichment already in progress' });
-    }
+    try {
+        if (artistEnrichmentStatus.running) {
+            return res.status(409).json({ error: 'Artist enrichment already in progress' });
+        }
 
-    // Get all artists without descriptions
-    const artists = db.prepare('SELECT * FROM artists WHERE description IS NULL OR description = ""').all() as Artist[];
+        // Get all artists without descriptions
+        const artists = db.prepare(`SELECT * FROM artists WHERE description IS NULL OR description = ''`).all() as Artist[];
 
-    if (artists.length === 0) {
-        return res.json({ message: 'No artists need enrichment', total: 0 });
-    }
+        if (artists.length === 0) {
+            return res.json({ message: 'No artists need enrichment', total: 0 });
+        }
 
-    // Initialize status
-    artistEnrichmentStatus = {
-        running: true,
-        total: artists.length,
-        processed: 0,
-        enriched: 0,
-        errors: 0,
-        currentArtist: ''
-    };
+        // Initialize status
+        artistEnrichmentStatus = {
+            running: true,
+            total: artists.length,
+            processed: 0,
+            enriched: 0,
+            errors: 0,
+            currentArtist: ''
+        };
 
-    res.json({ message: 'Artist bio enrichment started', total: artists.length });
+        res.json({ message: 'Artist bio enrichment started', total: artists.length });
 
-    // Run enrichment in background
-    (async () => {
-        console.log(`Starting bulk enrichment for ${artists.length} artists...`);
+        // Run enrichment in background
+        (async () => {
+            console.log(`Starting bulk enrichment for ${artists.length} artists...`);
 
-        const batchSize = 5;
-        const delayBetweenBatches = 2000;
+            const batchSize = 5;
+            const delayBetweenBatches = 2000;
 
-        for (let i = 0; i < artists.length; i += batchSize) {
-            const batch = artists.slice(i, i + batchSize);
+            for (let i = 0; i < artists.length; i += batchSize) {
+                const batch = artists.slice(i, i + batchSize);
 
-            const promises = batch.map(async (artist) => {
-                artistEnrichmentStatus.currentArtist = artist.name;
-                try {
-                    // Try Last.fm first (uses getSetting for API key)
-                    const info = await lastfm.getArtistInfo(artist.name);
-                    if (info && (info.description || info.image)) {
-                        db.prepare('UPDATE artists SET description = ?, image_path = ? WHERE id = ?')
-                            .run(info.description, info.image, artist.id);
-                        return { success: true, artist: artist.name };
+                const promises = batch.map(async (artist) => {
+                    artistEnrichmentStatus.currentArtist = artist.name;
+                    try {
+                        // Try Last.fm first (uses getSetting for API key)
+                        const info = await lastfm.getArtistInfo(artist.name);
+                        if (info && (info.description || info.image)) {
+                            db.prepare('UPDATE artists SET description = ?, image_path = ? WHERE id = ?')
+                                .run(info.description, info.image, artist.id);
+                            return { success: true, artist: artist.name };
+                        }
+
+                        // Fallback to Wikipedia
+                        const wikiResult = await wikipedia.getArtistBio(artist.name);
+                        if (wikiResult && wikiResult.bio) {
+                            db.prepare('UPDATE artists SET description = ?, wiki_url = ? WHERE id = ?')
+                                .run(wikiResult.bio, wikiResult.url, artist.id);
+                            return { success: true, artist: artist.name };
+                        }
+
+                        return { success: false, artist: artist.name, reason: 'No data found' };
+                    } catch (e) {
+                        console.error(`Failed to enrich ${artist.name}:`, (e as Error).message);
+                        return { success: false, artist: artist.name, error: (e as Error).message };
                     }
+                });
 
-                    // Fallback to Wikipedia
-                    const wikiResult = await wikipedia.getArtistBio(artist.name);
-                    if (wikiResult && wikiResult.bio) {
-                        db.prepare('UPDATE artists SET description = ?, wiki_url = ? WHERE id = ?')
-                            .run(wikiResult.bio, wikiResult.url, artist.id);
-                        return { success: true, artist: artist.name };
-                    }
+                const results = await Promise.allSettled(promises);
 
-                    return { success: false, artist: artist.name, reason: 'No data found' };
-                } catch (e) {
-                    console.error(`Failed to enrich ${artist.name}:`, (e as Error).message);
-                    return { success: false, artist: artist.name, error: (e as Error).message };
-                }
-            });
-
-            const results = await Promise.allSettled(promises);
-
-            results.forEach(result => {
-                artistEnrichmentStatus.processed++;
-                if (result.status === 'fulfilled') {
-                    if (result.value.success) {
-                        artistEnrichmentStatus.enriched++;
+                results.forEach(result => {
+                    artistEnrichmentStatus.processed++;
+                    if (result.status === 'fulfilled') {
+                        if (result.value.success) {
+                            artistEnrichmentStatus.enriched++;
+                        } else {
+                            artistEnrichmentStatus.errors++;
+                        }
                     } else {
                         artistEnrichmentStatus.errors++;
                     }
-                } else {
-                    artistEnrichmentStatus.errors++;
+                });
+
+                if (i + batchSize < artists.length) {
+                    await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
                 }
-            });
-
-            if (i + batchSize < artists.length) {
-                await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
             }
-        }
 
+            artistEnrichmentStatus.running = false;
+            artistEnrichmentStatus.currentArtist = '';
+            console.log(`Artist enrichment complete. ${artistEnrichmentStatus.enriched}/${artistEnrichmentStatus.total} enriched.`);
+        })();
+    } catch (err) {
+        console.error('Artist enrichment error:', err);
         artistEnrichmentStatus.running = false;
-        artistEnrichmentStatus.currentArtist = '';
-        console.log(`Artist enrichment complete. ${artistEnrichmentStatus.enriched}/${artistEnrichmentStatus.total} enriched.`);
-    })();
+        res.status(500).json({ error: 'Failed to start artist enrichment: ' + (err as Error).message });
+    }
 });
 
 // 10c. Get artist enrichment status

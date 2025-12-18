@@ -117,13 +117,15 @@ export default function LibraryPage({
                 ) : (
                     <>
                         {/* View Toggle Controls - Scroll-driven animation into header bar */}
-                        <div className="sticky top-0 z-30 -mx-3 md:-mx-6 px-3 md:px-6">
+                        <div className="sticky top-0 z-30 overflow-hidden">
                             <motion.div
                                 className="flex items-center justify-between backdrop-blur-xl border supports-[backdrop-filter]:bg-app-bg/60 py-2 md:py-3"
                                 style={{
                                     y: toolbarY,
                                     backgroundColor: toolbarBg,
                                     borderRadius: toolbarBorderRadius,
+                                    marginLeft: toolbarMarginX,
+                                    marginRight: toolbarMarginX,
                                     marginBottom: toolbarMarginBottom,
                                     paddingLeft: toolbarPaddingX,
                                     paddingRight: toolbarPaddingX,
