@@ -1,6 +1,6 @@
-import { Home, Library, ListMusic, Settings } from 'lucide-react';
+import { Home, Library, ListMusic, Settings, Download } from 'lucide-react';
 
-type MainTab = 'home' | 'library' | 'playlists' | 'settings';
+type MainTab = 'home' | 'library' | 'playlists' | 'downloads' | 'settings';
 
 interface MobileNavProps {
     mainTab: MainTab;
@@ -15,31 +15,39 @@ export default function MobileNav({ mainTab, setMainTab }: MobileNavProps) {
                     onClick={() => setMainTab('home')}
                     className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${mainTab === 'home' ? 'text-app-accent' : 'text-app-text-muted'}`}
                 >
-                    <Home size={22} />
-                    <span className="text-xs">Home</span>
+                    <Home size={20} />
+                    <span className="text-[10px]">Home</span>
                 </button>
                 <button
                     onClick={() => setMainTab('library')}
                     className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${mainTab === 'library' ? 'text-app-accent' : 'text-app-text-muted'}`}
                 >
-                    <Library size={22} />
-                    <span className="text-xs">Library</span>
+                    <Library size={20} />
+                    <span className="text-[10px]">Library</span>
                 </button>
                 <button
                     onClick={() => setMainTab('playlists')}
                     className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${mainTab === 'playlists' ? 'text-app-accent' : 'text-app-text-muted'}`}
                 >
-                    <ListMusic size={22} />
-                    <span className="text-xs">Playlists</span>
+                    <ListMusic size={20} />
+                    <span className="text-[10px]">Playlists</span>
+                </button>
+                <button
+                    onClick={() => setMainTab('downloads')}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${mainTab === 'downloads' ? 'text-app-accent' : 'text-app-text-muted'}`}
+                >
+                    <Download size={20} />
+                    <span className="text-[10px]">Offline</span>
                 </button>
                 <button
                     onClick={() => setMainTab('settings')}
                     className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${mainTab === 'settings' ? 'text-app-accent' : 'text-app-text-muted'}`}
                 >
-                    <Settings size={22} />
-                    <span className="text-xs">Settings</span>
+                    <Settings size={20} />
+                    <span className="text-[10px]">Settings</span>
                 </button>
             </div>
         </div>
     );
 }
+

@@ -23,6 +23,7 @@
     "autoprefixer": "^10.4.22",
     "axios": "^1.13.2",
     "colorthief": "^2.6.0",
+    "dexie": "^4.2.1",
     "framer-motion": "^12.23.25",
     "lucide-react": "^0.556.0",
     "postcss": "^8.5.6",
