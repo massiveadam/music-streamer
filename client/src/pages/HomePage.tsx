@@ -258,26 +258,7 @@ function HomePage({
                         </h1>
                     </header>
 
-                    {/* Smart Mixes - Curated For You */}
-                    {smartMixes.length > 0 && (
-                        <div className="mb-8 md:mb-16">
-                            <h2 className="text-lg md:text-2xl font-bold text-app-text mb-4 md:mb-6 flex items-center gap-2">
-                                <Wand2 size={24} className="text-app-accent" />
-                                Curated For You
-                            </h2>
-                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                                {smartMixes.map(mix => (
-                                    <SmartMixCard
-                                        key={mix.id}
-                                        mix={mix}
-                                        onClick={() => setSelectedMix(mix)}
-                                    />
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* 1. Recently Played Albums (Largest) */}
+                    {/* 1. Recently Played Albums (Largest) - Always First */}
                     {uniqueRecentlyPlayed.length > 0 && (
                         <div className="mb-8 md:mb-16">
                             <h2 className="text-lg md:text-2xl font-bold text-app-text mb-4 md:mb-6 flex items-center gap-2">
@@ -368,7 +349,30 @@ function HomePage({
                         </div>
                     )}
 
-                    {/* 5. Database Stats */}
+                    {/* 5. Smart Mixes - Placeholder section for future AI curation */}
+                    {smartMixes.length > 0 && (
+                        <div className="mb-12 border-t border-white/10 pt-8">
+                            <h2 className="text-base font-medium text-app-text-muted mb-4 flex items-center gap-2">
+                                <Wand2 size={16} className="text-app-text-muted" />
+                                Smart Mixes
+                                <span className="text-xs bg-app-surface px-2 py-0.5 rounded-full ml-2">Coming Soon</span>
+                            </h2>
+                            <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
+                                {smartMixes.map(mix => (
+                                    <div
+                                        key={mix.id}
+                                        className="shrink-0 bg-app-surface/40 hover:bg-app-surface/60 rounded-lg px-4 py-3 cursor-pointer transition-colors"
+                                        onClick={() => setSelectedMix(mix)}
+                                    >
+                                        <div className="text-sm font-medium text-app-text">{mix.name}</div>
+                                        <div className="text-xs text-app-text-muted">{mix.description}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 6. Database Stats */}
                     <div className="mb-12 border-t border-white/10 pt-8">
                         <h2 className="text-xl font-bold text-app-text mb-6 flex items-center gap-2">
                             <Hash size={20} className="text-app-accent" />

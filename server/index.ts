@@ -855,37 +855,60 @@ app.post('/api/enrich/fast', auth.authenticateToken, auth.requireAdmin, async (r
 });
 
 
-// 10b. Bulk enrich artist bios (Admin only)
+// ========== ARTIST BIO ENRICHMENT STATUS ==========
+let artistEnrichmentStatus = {
+    running: false,
+    total: 0,
+    processed: 0,
+    enriched: 0,
+    errors: 0,
+    currentArtist: ''
+};
+
+// 10b. Bulk enrich artist bios (Admin only) - Background process
 app.post('/api/enrich/artists', auth.authenticateToken, auth.requireAdmin, async (_req: AuthRequest, res: Response) => {
-    try {
-        // Get all artists without descriptions
-        const artists = db.prepare('SELECT * FROM artists WHERE description IS NULL OR description = ""').all() as Artist[];
+    if (artistEnrichmentStatus.running) {
+        return res.status(409).json({ error: 'Artist enrichment already in progress' });
+    }
 
-        if (artists.length === 0) {
-            return res.json({ message: 'No artists need enrichment' });
-        }
+    // Get all artists without descriptions
+    const artists = db.prepare('SELECT * FROM artists WHERE description IS NULL OR description = ""').all() as Artist[];
 
+    if (artists.length === 0) {
+        return res.json({ message: 'No artists need enrichment', total: 0 });
+    }
+
+    // Initialize status
+    artistEnrichmentStatus = {
+        running: true,
+        total: artists.length,
+        processed: 0,
+        enriched: 0,
+        errors: 0,
+        currentArtist: ''
+    };
+
+    res.json({ message: 'Artist bio enrichment started', total: artists.length });
+
+    // Run enrichment in background
+    (async () => {
         console.log(`Starting bulk enrichment for ${artists.length} artists...`);
 
-        let enriched = 0;
-        let errors = 0;
-        const batchSize = 5; // Process 5 artists at a time
-        const delayBetweenBatches = 2000; // 2 seconds between batches
+        const batchSize = 5;
+        const delayBetweenBatches = 2000;
 
-        // Process artists in batches to avoid overwhelming APIs
         for (let i = 0; i < artists.length; i += batchSize) {
             const batch = artists.slice(i, i + batchSize);
 
             const promises = batch.map(async (artist) => {
+                artistEnrichmentStatus.currentArtist = artist.name;
                 try {
-                    // Try Last.fm first
-                    if (process.env.LASTFM_API_KEY) {
-                        const info = await lastfm.getArtistInfo(artist.name);
-                        if (info && (info.description || info.image)) {
-                            db.prepare('UPDATE artists SET description = ?, image_path = ? WHERE id = ?')
-                                .run(info.description, info.image, artist.id);
-                            return { success: true, artist: artist.name };
-                        }
+                    // Try Last.fm first (uses getSetting for API key)
+                    const info = await lastfm.getArtistInfo(artist.name);
+                    if (info && (info.description || info.image)) {
+                        db.prepare('UPDATE artists SET description = ?, image_path = ? WHERE id = ?')
+                            .run(info.description, info.image, artist.id);
+                        return { success: true, artist: artist.name };
                     }
 
                     // Fallback to Wikipedia
@@ -905,35 +928,33 @@ app.post('/api/enrich/artists', auth.authenticateToken, auth.requireAdmin, async
 
             const results = await Promise.allSettled(promises);
 
-            // Process results
             results.forEach(result => {
+                artistEnrichmentStatus.processed++;
                 if (result.status === 'fulfilled') {
                     if (result.value.success) {
-                        enriched++;
+                        artistEnrichmentStatus.enriched++;
                     } else {
-                        errors++;
+                        artistEnrichmentStatus.errors++;
                     }
                 } else {
-                    errors++;
+                    artistEnrichmentStatus.errors++;
                 }
             });
 
-            // Rate limiting - wait between batches
             if (i + batchSize < artists.length) {
                 await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
             }
         }
 
-        res.json({
-            message: 'Bulk enrichment complete',
-            total: artists.length,
-            enriched,
-            errors
-        });
-    } catch (err) {
-        console.error('Bulk enrichment error:', err);
-        res.status(500).json({ error: 'Bulk enrichment failed' });
-    }
+        artistEnrichmentStatus.running = false;
+        artistEnrichmentStatus.currentArtist = '';
+        console.log(`Artist enrichment complete. ${artistEnrichmentStatus.enriched}/${artistEnrichmentStatus.total} enriched.`);
+    })();
+});
+
+// 10c. Get artist enrichment status
+app.get('/api/enrich/artists/status', (_req: Request, res: Response) => {
+    res.json(artistEnrichmentStatus);
 });
 
 // 11. Get Enrichment Status

@@ -52,6 +52,31 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
         isEnriching: false, total: 0, processed: 0, currentTrack: null, mode: 'album'
     });
 
+    // Artist Bio Enrichment Status
+    interface ArtistEnrichmentStatus {
+        running: boolean;
+        total: number;
+        processed: number;
+        enriched: number;
+        errors: number;
+        currentArtist: string;
+    }
+    const [artistEnrichmentStatus, setArtistEnrichmentStatus] = useState<ArtistEnrichmentStatus>({
+        running: false, total: 0, processed: 0, enriched: 0, errors: 0, currentArtist: ''
+    });
+
+    // Library Scan Status
+    interface ScanStatus {
+        isScanning: boolean;
+        processedCount: number;
+        currentFile: string | null;
+        totalFilesFound: number;
+        startTime: number | null;
+    }
+    const [scanStatus, setScanStatus] = useState<ScanStatus>({
+        isScanning: false, processedCount: 0, currentFile: null, totalFilesFound: 0, startTime: null
+    });
+
     useEffect(() => {
         // Fetch public config
         axios.get(`${getServerUrl()}/api/config/public`).then(res => {
@@ -189,13 +214,35 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
         }
     }, []);
 
+    // Poll artist enrichment status
+    const pollArtistEnrichmentStatus = useCallback(async () => {
+        try {
+            const res = await axios.get(`${getServerUrl()}/api/enrich/artists/status`);
+            setArtistEnrichmentStatus(res.data);
+        } catch (e) {
+            console.error('Failed to poll artist enrichment status:', e);
+        }
+    }, []);
+
+    // Poll scan status
+    const pollScanStatus = useCallback(async () => {
+        try {
+            const res = await axios.get(`${getServerUrl()}/api/status`);
+            setScanStatus(res.data);
+        } catch (e) {
+            console.error('Failed to poll scan status:', e);
+        }
+    }, []);
+
     useEffect(() => {
         if (user?.is_admin === 1) {
             // Initial fetch
             pollAnalysisStatus();
             pollEnrichmentStatus();
+            pollArtistEnrichmentStatus();
+            pollScanStatus();
 
-            // Poll every 3 seconds while either is running
+            // Poll every 3 seconds while any process is running
             const interval = setInterval(() => {
                 if (analysisStatus.status === 'running') {
                     pollAnalysisStatus();
@@ -203,10 +250,16 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                 if (enrichmentStatus.isEnriching) {
                     pollEnrichmentStatus();
                 }
+                if (artistEnrichmentStatus.running) {
+                    pollArtistEnrichmentStatus();
+                }
+                if (scanStatus.isScanning) {
+                    pollScanStatus();
+                }
             }, 3000);
             return () => clearInterval(interval);
         }
-    }, [user, pollAnalysisStatus, pollEnrichmentStatus, analysisStatus.status, enrichmentStatus.isEnriching]);
+    }, [user, pollAnalysisStatus, pollEnrichmentStatus, pollArtistEnrichmentStatus, pollScanStatus, analysisStatus.status, enrichmentStatus.isEnriching, artistEnrichmentStatus.running, scanStatus.isScanning]);
 
     const handleStartAnalysis = async (reanalyze = false) => {
         try {
@@ -527,7 +580,8 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                                     type="text"
                                     defaultValue="/home/adam/Music"
                                     id="settingsScanPath"
-                                    className="w-full bg-app-bg border border-app-surface focus:border-app-accent rounded-lg px-4 py-3 text-app-text outline-none transition-colors"
+                                    disabled={scanStatus.isScanning}
+                                    className="w-full bg-app-bg border border-app-surface focus:border-app-accent rounded-lg px-4 py-3 text-app-text outline-none transition-colors disabled:opacity-50"
                                 />
                             </div>
                             <div>
@@ -537,31 +591,138 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                                     defaultValue="500"
                                     id="settingsScanLimit"
                                     min="0"
-                                    className="w-full bg-app-bg border border-app-surface focus:border-app-accent rounded-lg px-4 py-3 text-app-text outline-none transition-colors"
+                                    disabled={scanStatus.isScanning}
+                                    className="w-full bg-app-bg border border-app-surface focus:border-app-accent rounded-lg px-4 py-3 text-app-text outline-none transition-colors disabled:opacity-50"
                                 />
                             </div>
-                            <div className="flex gap-4">
-                                <button
-                                    onClick={handleRescan}
-                                    className="flex-1 bg-transparent border border-white/20 hover:bg-white/10 text-white rounded-lg py-3 font-medium transition-colors"
-                                >
-                                    <RefreshCcw size={16} className="inline mr-2" />
-                                    Rescan Library
-                                </button>
-                            </div>
+
+                            {/* Scan Progress */}
+                            {scanStatus.isScanning ? (
+                                <div className="space-y-3 p-4 bg-app-bg rounded-lg border border-orange-500/20">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <Loader size={16} className="animate-spin text-orange-400" />
+                                            <span className="text-sm font-medium text-app-text">Scanning Library...</span>
+                                        </div>
+                                        <span className="text-sm text-app-text-muted">
+                                            {scanStatus.processedCount} files scanned
+                                        </span>
+                                    </div>
+                                    {scanStatus.currentFile && (
+                                        <div className="text-xs text-app-text-muted truncate" title={scanStatus.currentFile}>
+                                            {scanStatus.currentFile.split('/').slice(-2).join('/')}
+                                        </div>
+                                    )}
+                                    {scanStatus.startTime && (
+                                        <div className="text-xs text-app-text-muted">
+                                            Elapsed: {Math.floor((Date.now() - scanStatus.startTime) / 1000)}s
+                                        </div>
+                                    )}
+                                    <div className="w-full bg-app-surface rounded-full h-1.5 overflow-hidden">
+                                        <div className="bg-orange-400 h-full animate-pulse" style={{ width: '100%' }} />
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex gap-4">
+                                    <button
+                                        onClick={async () => {
+                                            await handleRescan();
+                                            setTimeout(pollScanStatus, 500);
+                                        }}
+                                        className="flex-1 bg-transparent border border-white/20 hover:bg-white/10 text-white rounded-lg py-3 font-medium transition-colors"
+                                    >
+                                        <RefreshCcw size={16} className="inline mr-2" />
+                                        Rescan Library
+                                    </button>
+                                </div>
+                            )}
                         </div>
 
                         <div className="mt-8 pt-6 border-t border-white/5">
                             <h3 className="text-sm font-bold text-app-text mb-4">Metadata Enrichment</h3>
                             <p className="text-sm text-app-text-muted mb-4">
-                                Fetch additional metadata from MusicBrainz, Last.fm, and Wikipedia.
+                                Fetch additional metadata from MusicBrainz, Last.fm, Wikipedia, and Discogs.
                             </p>
-                            <button
-                                onClick={handleEnrichment}
-                                className="bg-transparent border border-white/20 hover:bg-white/10 text-white rounded-lg px-6 py-3 font-medium transition-colors"
-                            >
-                                Start Enrichment
-                            </button>
+
+                            {/* Album Enrichment */}
+                            <div className="space-y-4">
+                                <div>
+                                    <h4 className="text-xs font-semibold text-app-text-muted uppercase tracking-wide mb-2">Albums (Credits, Tags, Cover Art)</h4>
+                                    {enrichmentStatus.isEnriching ? (
+                                        <div className="space-y-2">
+                                            <div className="flex justify-between text-sm text-app-text">
+                                                <span className="truncate max-w-[200px]">{enrichmentStatus.currentTrack || 'Processing...'}</span>
+                                                <span>{enrichmentStatus.processed}/{enrichmentStatus.total}</span>
+                                            </div>
+                                            <div className="w-full bg-app-bg rounded-full h-2 overflow-hidden">
+                                                <div
+                                                    className="bg-app-accent h-full transition-all duration-300"
+                                                    style={{ width: `${enrichmentStatus.total > 0 ? (enrichmentStatus.processed / enrichmentStatus.total * 100) : 0}%` }}
+                                                />
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <button
+                                            onClick={handleEnrichment}
+                                            className="bg-transparent border border-white/20 hover:bg-white/10 text-white rounded-lg px-5 py-2.5 font-medium transition-colors text-sm"
+                                        >
+                                            <RefreshCcw size={14} className="inline mr-2" />
+                                            Enrich Albums
+                                        </button>
+                                    )}
+                                </div>
+
+                                {/* Artist Bio Enrichment */}
+                                <div className="pt-4 border-t border-white/5">
+                                    <h4 className="text-xs font-semibold text-app-text-muted uppercase tracking-wide mb-2">Artist Bios (Last.fm + Wikipedia)</h4>
+                                    {artistEnrichmentStatus.running ? (
+                                        <div className="space-y-2">
+                                            <div className="flex justify-between text-sm text-app-text">
+                                                <span className="truncate max-w-[200px]">{artistEnrichmentStatus.currentArtist || 'Processing...'}</span>
+                                                <span>{artistEnrichmentStatus.processed}/{artistEnrichmentStatus.total}</span>
+                                            </div>
+                                            <div className="w-full bg-app-bg rounded-full h-2 overflow-hidden">
+                                                <div
+                                                    className="bg-teal-500 h-full transition-all duration-300"
+                                                    style={{ width: `${artistEnrichmentStatus.total > 0 ? (artistEnrichmentStatus.processed / artistEnrichmentStatus.total * 100) : 0}%` }}
+                                                />
+                                            </div>
+                                            <div className="text-xs text-app-text-muted">
+                                                {artistEnrichmentStatus.enriched} enriched, {artistEnrichmentStatus.errors} failed
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="flex items-center gap-3">
+                                            <button
+                                                onClick={async () => {
+                                                    try {
+                                                        await axios.post(`${getServerUrl()}/api/enrich/artists`, {}, {
+                                                            headers: { Authorization: `Bearer ${token}` }
+                                                        });
+                                                        setTimeout(pollArtistEnrichmentStatus, 500);
+                                                    } catch (e: any) {
+                                                        if (e.response?.status === 409) {
+                                                            alert('Artist enrichment already in progress');
+                                                        } else {
+                                                            alert('Failed to start artist enrichment: ' + (e.response?.data?.error || e.message));
+                                                        }
+                                                    }
+                                                }}
+                                                className="bg-transparent border border-teal-500/30 hover:bg-teal-500/10 text-teal-400 rounded-lg px-5 py-2.5 font-medium transition-colors text-sm"
+                                            >
+                                                <RefreshCcw size={14} className="inline mr-2" />
+                                                Enrich Artist Bios
+                                            </button>
+                                            {artistEnrichmentStatus.enriched > 0 && !artistEnrichmentStatus.running && (
+                                                <span className="text-xs text-green-400 flex items-center gap-1">
+                                                    <Check size={14} />
+                                                    Last run: {artistEnrichmentStatus.enriched}/{artistEnrichmentStatus.total} enriched
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 )}
