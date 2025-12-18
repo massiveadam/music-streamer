@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { X, Save, Loader2, Image as ImageIcon } from 'lucide-react';
 import axios from 'axios';
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+import { getServerUrl } from '../../config';
 
 interface EditMetadataModalProps {
     album: string;

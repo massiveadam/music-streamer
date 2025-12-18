@@ -772,14 +772,65 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
                     const genre = discogsData.genres[0] || null;
                     const styles = discogsData.styles.slice(0, 3).join(', ') || null; // Descriptors
 
-                    db.prepare(`
-                        UPDATE tracks SET
-                            genre = COALESCE(genre, ?),
-                            mood = COALESCE(mood, ?),
-                            year = COALESCE(year, ?),
-                            enriched = 1
-                        WHERE id = ?
-                    `).run(genre, styles, discogsData.year, track.id);
+                    // Create a pseudo-MBID for Discogs releases (prefixed to avoid collision)
+                    const discogsMbid = discogsData.discogsId ? `discogs-${discogsData.discogsId}` : null;
+
+                    // Store label if available
+                    let labelMbid: string | null = null;
+                    if (discogsData.label) {
+                        // Create pseudo-MBID for Discogs label
+                        const labelPseudoMbid = `discogs-label-${discogsData.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+
+                        // Check if label exists
+                        const existingLabel = db.prepare('SELECT id FROM labels WHERE mbid = ? OR name = ?').get(labelPseudoMbid, discogsData.label) as { id: number } | undefined;
+
+                        if (!existingLabel) {
+                            db.prepare(`
+                                INSERT INTO labels (mbid, name, type, country, founded)
+                                VALUES (?, ?, 'Discogs', ?, NULL)
+                            `).run(labelPseudoMbid, discogsData.label, discogsData.country);
+                        }
+                        labelMbid = labelPseudoMbid;
+                    }
+
+                    // Create release record if we have a Discogs ID
+                    if (discogsMbid) {
+                        const existingRelease = db.prepare('SELECT id FROM releases WHERE mbid = ?').get(discogsMbid) as { id: number } | undefined;
+
+                        if (!existingRelease) {
+                            db.prepare(`
+                                INSERT INTO releases (mbid, title, artist_credit, release_date, country, label_mbid, status, primary_type)
+                                VALUES (?, ?, ?, ?, ?, ?, 'Official', 'Album')
+                            `).run(
+                                discogsMbid,
+                                track.album,
+                                track.artist,
+                                discogsData.year ? String(discogsData.year) : null,
+                                discogsData.country,
+                                labelMbid
+                            );
+                        }
+
+                        // Update track with release_mbid
+                        db.prepare(`
+                            UPDATE tracks SET
+                                genre = COALESCE(genre, ?),
+                                mood = COALESCE(mood, ?),
+                                year = COALESCE(year, ?),
+                                release_mbid = ?,
+                                enriched = 1
+                            WHERE id = ?
+                        `).run(genre, styles, discogsData.year, discogsMbid, track.id);
+                    } else {
+                        db.prepare(`
+                            UPDATE tracks SET
+                                genre = COALESCE(genre, ?),
+                                mood = COALESCE(mood, ?),
+                                year = COALESCE(year, ?),
+                                enriched = 1
+                            WHERE id = ?
+                        `).run(genre, styles, discogsData.year, track.id);
+                    }
 
                     // Store styles as tags using proper tag_id reference
                     if (discogsData.styles.length > 0) {
@@ -801,7 +852,7 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
                         }
                     }
 
-                    console.log(`[Discogs] Enriched: ${track.artist} - ${track.title} (genres: ${discogsData.genres.join(', ')})`);
+                    console.log(`[Discogs] Enriched: ${track.artist} - ${track.title} (genres: ${discogsData.genres.join(', ')}, label: ${discogsData.label || 'none'})`);
                     return { success: true, reason: 'Discogs fallback' };
                 }
             } catch (e) {

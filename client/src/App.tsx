@@ -1,4 +1,5 @@
 import { SERVER_URL, isServerConfigured, getServerUrl } from './config';
+import { useMediaSession, updatePositionState } from './hooks/useMediaSession';
 import { useState, useEffect, useRef, useMemo, useCallback, ChangeEvent, MouseEvent as ReactMouseEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import axios, { AxiosResponse } from 'axios';
 import { Play, Pause, SkipForward, SkipBack, Volume2, Sliders, Disc, Search, Settings, X, Clock, Calendar, Hash, PlusCircle, RefreshCcw, Home, Library, Sparkles, ListMusic, Shuffle, Repeat, Repeat1, LayoutGrid, List, Plus, RefreshCw, LogOut } from 'lucide-react';
@@ -97,6 +98,10 @@ function MusicPlayer() {
   const [showNowPlaying, setShowNowPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
+  const [isBuffering, setIsBuffering] = useState<boolean>(false);
+
+  // Debounced seek ref to prevent rapid seek spam
+  const seekTimeoutRef = useRef<number | null>(null);
 
   // Theme
   const [theme, setTheme] = useState<string>(() => localStorage.getItem('theme') || 'dark');
@@ -357,11 +362,28 @@ function MusicPlayer() {
       if (nextDeck === 'A') setDeckATrack(nextTrack);
       else setDeckBTrack(nextTrack);
 
-      // Wait for audio element to be ready
-      await new Promise(resolve => setTimeout(resolve, 50));
+      setIsBuffering(true);
+
+      // Wait for audio element to be ready with longer timeout
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       const nextAudio = nextDeck === 'A' ? audioRefA.current : audioRefB.current;
       if (!nextAudio) throw new Error('Audio element not ready');
+
+      // Wait for enough data to be buffered before playing
+      if (nextAudio.readyState < 3) {
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            nextAudio.removeEventListener('canplaythrough', onReady);
+            resolve(); // Proceed anyway after timeout
+          }, 2000);
+          const onReady = () => {
+            clearTimeout(timeout);
+            resolve();
+          };
+          nextAudio.addEventListener('canplaythrough', onReady, { once: true });
+        });
+      }
 
       if (transition === 'crossfade') {
         await nextAudio.play();
@@ -380,6 +402,8 @@ function MusicPlayer() {
         audioEngine.activeDeck = nextDeck;
       }
 
+      setIsBuffering(false);
+
       setActiveDeck(nextDeck);
       setCurrentTrackIndex(index);
       setIsPlaying(true);
@@ -391,6 +415,7 @@ function MusicPlayer() {
       axios.post(`${getServerUrl()}/api/history/log`, { trackId: nextTrack.id }).catch(() => { });
     } catch (error) {
       console.error('Playback error:', error);
+      setIsBuffering(false);
     } finally {
       setIsTransitioning(false);
     }
@@ -498,6 +523,20 @@ function MusicPlayer() {
   };
 
   const currentTrack = tracks[currentTrackIndex]; // For UI display
+
+  // Media Session API for lock screen controls (iOS/Chrome/Firefox/Linux)
+  useMediaSession({
+    currentTrack,
+    isPlaying,
+    onPlay: togglePlay,
+    onPause: togglePlay,
+    onPrevious: useCallback(() => {
+      if (currentTrackIndex > 0) playTrack(currentTrackIndex - 1, 'cut');
+    }, [currentTrackIndex, playTrack]),
+    onNext: useCallback(() => {
+      if (currentTrackIndex < tracks.length - 1) playTrack(currentTrackIndex + 1, 'crossfade');
+    }, [currentTrackIndex, tracks.length, playTrack]),
+  });
 
   // Monitor Track End for Auto-Crossfade
   const handleTrackEnd = () => {
@@ -1485,8 +1524,21 @@ function MusicPlayer() {
           currentTime={currentTime}
           duration={duration}
           onSeek={(time) => {
-            const currentAudio = activeDeck === 'A' ? audioRefA.current : audioRefB.current;
-            if (currentAudio) currentAudio.currentTime = time;
+            // Debounce seek to prevent rapid seeking from crashing playback
+            if (seekTimeoutRef.current) {
+              clearTimeout(seekTimeoutRef.current);
+            }
+            seekTimeoutRef.current = window.setTimeout(() => {
+              const currentAudio = activeDeck === 'A' ? audioRefA.current : audioRefB.current;
+              if (currentAudio && !isNaN(time) && isFinite(time) && time >= 0) {
+                try {
+                  currentAudio.currentTime = Math.min(time, currentAudio.duration || time);
+                } catch (e) {
+                  console.error('Seek error:', e);
+                }
+              }
+              seekTimeoutRef.current = null;
+            }, 50);
           }}
           onFavorite={async (id) => {
             try {

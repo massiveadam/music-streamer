@@ -87,7 +87,7 @@ export default function MiniPlayer({
                         onClick={togglePlay}
                         className="h-10 w-10 md:h-12 md:w-12 bg-white text-black rounded-full flex items-center justify-center hover:scale-105 transition-transform shadow-lg"
                     >
-                        {isPlaying ? <Pause size={20} md:size={22} fill="currentColor" /> : <Play size={20} md:size={22} fill="currentColor" className="ml-0.5" />}
+                        {isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" className="ml-0.5" />}
                     </button>
                     <button onClick={() => playTrack(currentTrackIndex + 1, 'crossfade')} className="text-gray-400 hover:text-white transition-colors"><SkipForward size={22} /></button>
                     <button

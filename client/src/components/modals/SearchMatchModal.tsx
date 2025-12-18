@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { X, Search, Check, Loader2 } from 'lucide-react';
 import axios from 'axios';
 
-const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+import { getServerUrl } from '../../config';
 
 interface Release {
     id: string;
