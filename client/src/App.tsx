@@ -364,24 +364,24 @@ function MusicPlayer() {
 
       setIsBuffering(true);
 
-      // Wait for audio element to be ready with longer timeout
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Wait briefly for audio element to be ready
+      await new Promise(resolve => setTimeout(resolve, 50));
 
       const nextAudio = nextDeck === 'A' ? audioRefA.current : audioRefB.current;
       if (!nextAudio) throw new Error('Audio element not ready');
 
-      // Wait for enough data to be buffered before playing
-      if (nextAudio.readyState < 3) {
-        await new Promise<void>((resolve, reject) => {
+      // Wait for minimal data to start playing (canplay = readyState 2, faster than canplaythrough = 3)
+      if (nextAudio.readyState < 2) {
+        await new Promise<void>((resolve) => {
           const timeout = setTimeout(() => {
-            nextAudio.removeEventListener('canplaythrough', onReady);
-            resolve(); // Proceed anyway after timeout
-          }, 2000);
+            nextAudio.removeEventListener('canplay', onReady);
+            resolve(); // Proceed anyway after timeout - audio will buffer while playing
+          }, 800);
           const onReady = () => {
             clearTimeout(timeout);
             resolve();
           };
-          nextAudio.addEventListener('canplaythrough', onReady, { once: true });
+          nextAudio.addEventListener('canplay', onReady, { once: true });
         });
       }
 
@@ -1211,6 +1211,24 @@ function MusicPlayer() {
                 setDuration((e.target as HTMLAudioElement).duration || 0);
               }
             }}
+            onError={(e) => {
+              console.error('Audio A error:', (e.target as HTMLAudioElement).error);
+              if (activeDeck === 'A') setIsBuffering(false);
+            }}
+            onStalled={() => {
+              console.warn('Audio A stalled - network may be slow');
+              if (activeDeck === 'A') setIsBuffering(true);
+            }}
+            onWaiting={() => {
+              if (activeDeck === 'A') setIsBuffering(true);
+            }}
+            onPlaying={() => {
+              if (activeDeck === 'A') setIsBuffering(false);
+            }}
+            onCanPlayThrough={() => {
+              if (activeDeck === 'A') setIsBuffering(false);
+            }}
+            preload="auto"
             crossOrigin="anonymous"
           />
           <audio
@@ -1223,6 +1241,24 @@ function MusicPlayer() {
                 setDuration((e.target as HTMLAudioElement).duration || 0);
               }
             }}
+            onError={(e) => {
+              console.error('Audio B error:', (e.target as HTMLAudioElement).error);
+              if (activeDeck === 'B') setIsBuffering(false);
+            }}
+            onStalled={() => {
+              console.warn('Audio B stalled - network may be slow');
+              if (activeDeck === 'B') setIsBuffering(true);
+            }}
+            onWaiting={() => {
+              if (activeDeck === 'B') setIsBuffering(true);
+            }}
+            onPlaying={() => {
+              if (activeDeck === 'B') setIsBuffering(false);
+            }}
+            onCanPlayThrough={() => {
+              if (activeDeck === 'B') setIsBuffering(false);
+            }}
+            preload="auto"
             crossOrigin="anonymous"
           />
         </div>
