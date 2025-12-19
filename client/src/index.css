@@ -196,6 +196,17 @@ body {
   animation: skeleton-pulse 1.5s ease-in-out infinite;
 }
 
+/* Shimmer animation for lazy images */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
+}
+
 [data-theme="light"] .skeleton {
   background: linear-gradient(90deg, #e5e5e5 25%, #d4d4d4 50%, #e5e5e5 75%);
   background-size: 200% 100%;
