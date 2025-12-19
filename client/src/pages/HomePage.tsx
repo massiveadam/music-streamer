@@ -64,7 +64,7 @@ const AlbumCard = memo(function AlbumCard({
         }
     }, [track, albums, setSelectedAlbum]);
 
-    const sizeClass = size === 'large' ? 'w-64' : 'w-44';
+    const sizeClass = size === 'large' ? 'w-96' : 'w-44';
     const imgSize = size === 'large' ? 64 : 32;
 
     return (
@@ -261,9 +261,8 @@ function HomePage({
                     {/* 1. Recently Played Albums (Largest) - Always First */}
                     {uniqueRecentlyPlayed.length > 0 && (
                         <div className="mb-8 md:mb-16">
-                            <h2 className="text-lg md:text-2xl font-bold text-app-text mb-4 md:mb-6 flex items-center gap-2">
-                                <Disc size={24} className="text-app-accent" />
-                                Jump Back In
+                            <h2 className="text-lg md:text-2xl font-bold text-app-text mb-4 md:mb-6">
+                                Recently Played
                             </h2>
                             <div className="flex gap-4 md:gap-6 overflow-x-auto pb-4 no-scrollbar -mx-4 px-4 md:mx-0 md:px-0">
                                 {uniqueRecentlyPlayed.map((track, i) => (

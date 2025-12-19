@@ -837,6 +837,74 @@ function MusicPlayer() {
     return () => clearInterval(pollTimer);
   }, []);
 
+  // Track modal state for history management
+  const modalStackRef = useRef<string[]>([]);
+  const isPopstateRef = useRef(false);
+
+  // Helper to get current modal state as a string
+  const getCurrentModalState = useCallback(() => {
+    if (showNowPlaying) return 'nowPlaying';
+    if (selectedAlbum) return 'album';
+    if (selectedArtist) return 'artist';
+    if (selectedLabel) return 'label';
+    if (selectedCollection) return 'collection';
+    if (selectedPlaylist) return 'playlist';
+    return null;
+  }, [showNowPlaying, selectedAlbum, selectedArtist, selectedLabel, selectedCollection, selectedPlaylist]);
+
+  // Push history state when modals open
+  useEffect(() => {
+    // Skip if this change was triggered by popstate
+    if (isPopstateRef.current) {
+      isPopstateRef.current = false;
+      return;
+    }
+
+    const currentModal = getCurrentModalState();
+    const stackTop = modalStackRef.current[modalStackRef.current.length - 1];
+
+    if (currentModal && currentModal !== stackTop) {
+      // A new modal opened - push to history
+      modalStackRef.current.push(currentModal);
+      window.history.pushState({ modal: currentModal }, '', window.location.pathname);
+    } else if (!currentModal && modalStackRef.current.length > 0) {
+      // All modals closed - clear stack (but don't manipulate history, user may have used back button)
+      modalStackRef.current = [];
+    }
+  }, [showNowPlaying, selectedAlbum, selectedArtist, selectedLabel, selectedCollection, selectedPlaylist, getCurrentModalState]);
+
+  // Handle browser back button (popstate event)
+  useEffect(() => {
+    const handlePopstate = (e: PopStateEvent) => {
+      // Check if we have modals open that should be closed
+      const currentModal = getCurrentModalState();
+
+      if (currentModal) {
+        // Mark that we're handling a popstate (to prevent pushing new history in the modal effect)
+        isPopstateRef.current = true;
+        modalStackRef.current.pop();
+
+        // Close the topmost modal
+        if (showNowPlaying) {
+          setShowNowPlaying(false);
+        } else if (selectedAlbum) {
+          setSelectedAlbum(null);
+        } else if (selectedArtist) {
+          setSelectedArtist(null);
+        } else if (selectedLabel) {
+          setSelectedLabel(null);
+        } else if (selectedCollection) {
+          setSelectedCollection(null);
+        } else if (selectedPlaylist) {
+          setSelectedPlaylist(null);
+        }
+      }
+    };
+
+    window.addEventListener('popstate', handlePopstate);
+    return () => window.removeEventListener('popstate', handlePopstate);
+  }, [showNowPlaying, selectedAlbum, selectedArtist, selectedLabel, selectedCollection, selectedPlaylist, getCurrentModalState]);
+
   // Handle back navigation (Android back button/gesture)
   useEffect(() => {
     const handleBack = (e: Event) => {
