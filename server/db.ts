@@ -184,13 +184,8 @@ addColumn('artists', 'description', 'TEXT');
 addColumn('artists', 'image_path', 'TEXT');
 addColumn('artists', 'wiki_url', 'TEXT');
 
-// Create index for tags
+// Deduplicate entity_tags
 try {
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_entity_tags_lookup ON entity_tags(entity_type, entity_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_album_images_mbid ON album_images(release_mbid)`);
-
-  // Deduplicate entity_tags
   db.exec(`
     DELETE FROM entity_tags
     WHERE id NOT IN (
@@ -199,12 +194,7 @@ try {
       GROUP BY entity_type, entity_id, tag_id
     )
   `);
-
-  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_tags_unique ON entity_tags(entity_type, entity_id, tag_id)`);
-
-  // Optimize Credits Search
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_credits_role ON credits(role)`);
-} catch (e) { /* Index or dedup might fail on empty table */ }
+} catch (e) { /* table might be empty */ }
 
 // Playlists table
 db.exec(`
@@ -240,7 +230,6 @@ db.exec(`
     FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
   )
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_history_played_at ON listening_history(played_at DESC)`);
 
 // Add added_at column to tracks
 addColumn('tracks', 'added_at', 'TEXT');
@@ -250,11 +239,6 @@ addColumn('playlists', 'type', 'TEXT'); // 'manual', 'smart', 'auto'
 addColumn('playlists', 'rules', 'TEXT'); // JSON rules for smart playlists
 addColumn('playlists', 'pinned_to_home', 'INTEGER'); // Show on homepage
 addColumn('playlists', 'cover_art_path', 'TEXT'); // Custom cover image
-
-// Index for homepage playlists
-try {
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_playlists_pinned ON playlists(pinned_to_home)`);
-} catch (e) { /* Index exists */ }
 
 // Album Collections table
 db.exec(`
@@ -282,7 +266,6 @@ db.exec(`
     UNIQUE(collection_id, album_name, artist_name)
   )
 `);
-db.exec(`CREATE INDEX IF NOT EXISTS idx_collection_albums_collection ON collection_albums(collection_id)`);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_collections_pinned ON album_collections(pinned_to_home)`);
 
 // ===== MULTI-USER SUPPORT =====
@@ -291,14 +274,6 @@ addColumn('playlists', 'user_id', 'INTEGER');
 addColumn('listening_history', 'user_id', 'INTEGER');
 addColumn('album_collections', 'user_id', 'INTEGER');
 addColumn('album_collections', 'is_shared', 'INTEGER DEFAULT 0');
-
-// Indexes for user queries
-try {
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_playlists_user ON playlists(user_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_listening_history_user ON listening_history(user_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_collections_user ON album_collections(user_id)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`);
-} catch (e) { /* Indexes may exist */ }
 
 // ===== SYSTEM SETTINGS =====
 db.exec(`
@@ -418,23 +393,30 @@ try {
     CREATE INDEX IF NOT EXISTS idx_credits_track_id ON credits(track_id);
     CREATE INDEX IF NOT EXISTS idx_credits_track_role ON credits(track_id, role);
     CREATE INDEX IF NOT EXISTS idx_credits_name ON credits(name);
-    
-    -- Artist indexes
-    CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name);
-    CREATE INDEX IF NOT EXISTS idx_artists_mbid ON artists(mbid);
+    CREATE INDEX IF NOT EXISTS idx_credits_role ON credits(role);
     
     -- Playlist indexes
     CREATE INDEX IF NOT EXISTS idx_playlist_tracks_playlist_position ON playlist_tracks(playlist_id, position);
     CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track_id ON playlist_tracks(track_id);
+    CREATE INDEX IF NOT EXISTS idx_playlists_pinned ON playlists(pinned_to_home);
+    CREATE INDEX IF NOT EXISTS idx_playlists_user ON playlists(user_id);
     
     -- Collection indexes
     CREATE INDEX IF NOT EXISTS idx_collection_albums_collection_position ON collection_albums(collection_id, position);
+    CREATE INDEX IF NOT EXISTS idx_collections_pinned ON album_collections(pinned_to_home);
+    CREATE INDEX IF NOT EXISTS idx_collections_user ON album_collections(user_id);
     
     -- Listening history indexes
     CREATE INDEX IF NOT EXISTS idx_listening_history_track_id ON listening_history(track_id);
+    CREATE INDEX IF NOT EXISTS idx_listening_history_user ON listening_history(user_id);
+    CREATE INDEX IF NOT EXISTS idx_history_played_at ON listening_history(played_at DESC);
     
-    -- Tag indexes
-    CREATE INDEX IF NOT EXISTS idx_entity_tags_entity_lookup ON entity_tags(entity_type, entity_id, tag_id);
+    -- Tag and Image indexes
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_tags_unique ON entity_tags(entity_type, entity_id, tag_id);
+    CREATE INDEX IF NOT EXISTS idx_album_images_mbid ON album_images(release_mbid);
+    
+    -- User indexes
+    CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
   `);
   console.log('[DB] All indexes created successfully');
 } catch (e) {

@@ -621,35 +621,41 @@ app.get('/api/search', (req: Request, res: Response) => {
         // Get all potential matches with LIKE first (for performance)
         // Then score and re-rank with fuzzy algorithm
         let sql = `
-            SELECT DISTINCT t.*
-            FROM tracks t
-            WHERE t.title LIKE ? OR t.artist LIKE ? OR t.album LIKE ? OR t.genre LIKE ? OR t.mood LIKE ?
-            UNION
-            SELECT DISTINCT t.*
-            FROM tracks t
-            JOIN credits c ON c.track_id = t.id
-            WHERE c.name LIKE ?
+            SELECT t.*, MAX(match_type) as match_type
+            FROM (
+                SELECT *, 1 as match_type FROM tracks
+                WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR genre LIKE ? OR mood LIKE ?
+                UNION ALL
+                SELECT t.*, 2 as match_type FROM tracks t
+                JOIN credits c ON c.track_id = t.id
+                WHERE c.name LIKE ?
+            ) t
+            GROUP BY t.id
         `;
 
         const params: any[] = [likeQuery, likeQuery, likeQuery, likeQuery, likeQuery, likeQuery];
 
         // Add Sonic Profile query if matched
         if (sonicProfileSql) {
-            sql += `
-            UNION
-            SELECT DISTINCT t.*
-            FROM tracks t
-            WHERE ${sonicProfileSql.sql}
+            sql = `
+            SELECT t.*, MAX(match_type) as match_type
+            FROM (
+                ${sql.replace('GROUP BY t.id', '')}
+                UNION ALL
+                SELECT *, 3 as match_type FROM tracks
+                WHERE ${sonicProfileSql.sql}
+            ) t
+            GROUP BY t.id
             `;
             params.push(...sonicProfileSql.params);
         }
 
-        let results = db.prepare(sql).all(...params) as (Track & { is_credit_match: number })[];
+        let results = db.prepare(sql).all(...params) as (Track & { match_type: number })[];
 
         // If no results with LIKE, try broader fuzzy search
-        if (results.length === 0 && searchTerm.length >= 3) {
-            // Get more tracks and fuzzy match
-            const allTracks = db.prepare('SELECT * FROM tracks LIMIT 2000').all() as Track[];
+        if (results.length === 0 && searchTerm.length >= 2) {
+            // Increase limit to 10000 for better coverage in larger libraries
+            const allTracks = db.prepare('SELECT * FROM tracks LIMIT 10000').all() as Track[];
 
             results = allTracks.filter(t => {
                 const score = Math.max(
@@ -658,27 +664,26 @@ app.get('/api/search', (req: Request, res: Response) => {
                     fuzzyScore(t.album || null, searchTerm),
                     fuzzyScore(t.genre || null, searchTerm)
                 );
-                return score > 15;
-            }).map(t => ({ ...t, is_credit_match: 0 })); // Add is_credit_match for consistency
+                return score > 10; // Lowered threshold for broader fallback
+            }).map(t => ({ ...t, match_type: 0 }));
         }
 
         // Score and rank all results
         const scoredResults = results.map(track => {
-            let score = 0;
             const t = track;
-
-            // Base score for finding it
-            if (t.is_credit_match) {
-                const creditScore = fuzzyScore(searchTerm, searchTerm); // Use 100 base score logic effectively? 
-                // Wait, if it matched via LIKE, it matched.
-                // We should give it a substantial bonus if it came from credits.
-                score += 80;
-            }
+            let score = 0;
 
             const titleScore = fuzzyScore(t.title, searchTerm);
             const artistScore = fuzzyScore(t.artist, searchTerm);
             const albumScore = fuzzyScore(t.album || null, searchTerm);
             const genreScore = fuzzyScore(t.genre || null, searchTerm);
+
+            // Base score from match type
+            if (t.match_type === 2) { // Credit match
+                score += 40;
+            } else if (t.match_type === 3) { // Sonic profile match
+                score += 100;
+            }
 
             let sonicBonus = 0;
             if (matchedProfileName && sonicProfiles.getTrackProfiles) {
@@ -689,13 +694,15 @@ app.get('/api/search', (req: Request, res: Response) => {
                     bpm: t.bpm || 0
                 });
                 if (trackProfiles.includes(matchedProfileName)) {
-                    sonicBonus = 200; // Massive bonus for sonic match
+                    sonicBonus = 150;
                 }
             }
 
-            // Weight: title > artist > album > genre
-            // If is_credit_match, that 80 points helps it float up if other scores are 0.
-            const totalScore = Math.max(score, titleScore * 1.5 + artistScore * 1.3 + albumScore * 1.1 + genreScore + sonicBonus);
+            // Enhanced Weighting: title > artist > album > genre
+            const totalScore = Math.max(
+                score,
+                titleScore * 2.0 + artistScore * 1.5 + albumScore * 1.2 + genreScore + sonicBonus
+            );
 
             return { ...t, _fuzzyScore: totalScore };
         });
@@ -707,7 +714,7 @@ app.get('/api/search', (req: Request, res: Response) => {
         const total = scoredResults.length;
         const paginatedResults = scoredResults.slice(offset, offset + limit).map(r => {
             // Remove internal flags
-            const { _fuzzyScore, is_credit_match, ...rest } = r as any;
+            const { _fuzzyScore, match_type, ...rest } = r as any;
             return rest;
         });
 

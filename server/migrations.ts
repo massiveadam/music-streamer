@@ -8,6 +8,8 @@
 import db from './db';
 import { runMigrationV2 } from './db-migration-v2';
 import { runPhase2Migration } from './db-migration-phase2';
+import { runSyncTagCountsMigration } from './db-migration-tags';
+import { runConsolidateIndexesMigration } from './db-migration-indexes';
 
 // Ensure migrations table exists
 db.exec(`
@@ -84,6 +86,34 @@ export function runAllMigrations(): void {
         }
     } else {
         console.log('[Migrations] Cleanup already applied');
+    }
+
+    // Sync Tag Counts: Fixes tags.count and adds triggers
+    if (!isMigrationRun('tags-sync-v1')) {
+        console.log('[Migrations] Running tag sync migration...');
+        const success = runSyncTagCountsMigration();
+        if (success) {
+            markMigrationRun('tags-sync-v1');
+            console.log('[Migrations] Tag sync migration completed');
+        } else {
+            console.error('[Migrations] Tag sync migration FAILED');
+        }
+    } else {
+        console.log('[Migrations] Tag sync already applied');
+    }
+
+    // Consolidate Indexes: Removes redundant indexes
+    if (!isMigrationRun('index-consolidation-v3')) {
+        console.log('[Migrations] Running index consolidation migration v3...');
+        const success = runConsolidateIndexesMigration();
+        if (success) {
+            markMigrationRun('index-consolidation-v3');
+            console.log('[Migrations] Index consolidation migration completed');
+        } else {
+            console.error('[Migrations] Index consolidation migration FAILED');
+        }
+    } else {
+        console.log('[Migrations] Index consolidation already applied');
     }
 
     console.log('[Migrations] All migrations checked');
