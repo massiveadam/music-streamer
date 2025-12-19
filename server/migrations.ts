@@ -67,6 +67,25 @@ export function runAllMigrations(): void {
         console.log('[Migrations] Phase 2 data already applied');
     }
 
+    // Cleanup: Convert pseudo-MBIDs, create releases for orphans, deduplicate
+    if (!isMigrationRun('v2-cleanup')) {
+        console.log('[Migrations] Running cleanup migration...');
+        try {
+            const { runCleanup } = require('./db-cleanup');
+            const success = runCleanup();
+            if (success) {
+                markMigrationRun('v2-cleanup');
+                console.log('[Migrations] Cleanup migration completed');
+            } else {
+                console.error('[Migrations] Cleanup migration FAILED');
+            }
+        } catch (e) {
+            console.error('[Migrations] Cleanup migration error:', e);
+        }
+    } else {
+        console.log('[Migrations] Cleanup already applied');
+    }
+
     console.log('[Migrations] All migrations checked');
 }
 
