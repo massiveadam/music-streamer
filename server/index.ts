@@ -1469,33 +1469,48 @@ app.post('/api/album/re-enrich', auth.authenticateToken, async (req: AuthRequest
     }
 
     try {
-        // Mark all tracks in this album as unenriched
-        const result = db.prepare('UPDATE tracks SET enriched = 0, release_mbid = NULL WHERE album = ? AND artist = ?')
-            .run(album, artist);
-
-        // Trigger enrichment for these tracks
+        // Get all tracks in this album
         const tracks = db.prepare('SELECT * FROM tracks WHERE album = ? AND artist = ?').all(album, artist) as Track[];
 
-        if (tracks.length > 0) {
-            // Enrich the first track (which will enrich the whole album)
-            const enrichResult = await musicbrainz.enrichTrack(tracks[0]);
+        if (tracks.length === 0) {
+            return res.json({ success: false, error: 'No tracks found for this album' });
+        }
 
-            // Mark other tracks as enriched if first one succeeded
-            if (enrichResult.success) {
-                for (const track of tracks.slice(1)) {
-                    db.prepare('UPDATE tracks SET enriched = 1, release_mbid = ? WHERE id = ?')
-                        .run(tracks[0].release_mbid, track.id);
+        // Mark all tracks as unenriched to force re-processing
+        db.prepare('UPDATE tracks SET enriched = 0 WHERE album = ? AND artist = ?').run(album, artist);
+
+        // Use the album-based enrichment which properly handles all tracks
+        // This calls startAlbumEnrichment internally with proper credit application
+        let successCount = 0;
+        let errorCount = 0;
+
+        // Enrich each track individually to ensure credits are applied
+        for (const track of tracks) {
+            try {
+                const enrichResult = await musicbrainz.enrichTrack(track);
+                if (enrichResult.success) {
+                    successCount++;
+                } else {
+                    // Still mark as enriched to avoid getting stuck
+                    db.prepare('UPDATE tracks SET enriched = 1 WHERE id = ?').run(track.id);
+                    errorCount++;
                 }
+            } catch (e) {
+                console.error(`Error enriching track ${track.id}:`, e);
+                db.prepare('UPDATE tracks SET enriched = 1 WHERE id = ?').run(track.id);
+                errorCount++;
             }
 
-            res.json({
-                success: enrichResult.success,
-                tracksUpdated: result.changes,
-                details: enrichResult
-            });
-        } else {
-            res.json({ success: false, error: 'No tracks found for this album' });
+            // Small delay to avoid rate limiting
+            await new Promise(r => setTimeout(r, 500));
         }
+
+        res.json({
+            success: successCount > 0,
+            tracksEnriched: successCount,
+            tracksWithErrors: errorCount,
+            totalTracks: tracks.length
+        });
     } catch (e) {
         console.error('Re-enrich error:', e);
         res.status(500).json({ error: (e as Error).message });
