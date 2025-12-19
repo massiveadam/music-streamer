@@ -14,6 +14,10 @@ import * as auth from './auth';
 import type { AuthRequest } from './auth';
 import * as audioAnalyzer from './audioAnalyzer';
 import * as loudnessAnalyzer from './loudnessAnalyzer';
+import { runAllMigrations } from './migrations';
+
+// Run database migrations on startup
+runAllMigrations();
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);

@@ -819,65 +819,78 @@ export async function enrichTrack(track: Track): Promise<{ success: boolean; mbi
                     // Store Discogs metadata
                     const genre = discogsData.genres[0] || null;
                     const styles = discogsData.styles.slice(0, 3).join(', ') || null; // Descriptors
+                    const now = new Date().toISOString();
 
-                    // Create a pseudo-MBID for Discogs releases (prefixed to avoid collision)
-                    const discogsMbid = discogsData.discogsId ? `discogs-${discogsData.discogsId}` : null;
-
-                    // Store label if available
-                    let labelMbid: string | null = null;
+                    // Store label if available (without pseudo-MBID)
+                    let labelId: number | null = null;
                     if (discogsData.label) {
-                        // Create pseudo-MBID for Discogs label
-                        const labelPseudoMbid = `discogs-label-${discogsData.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+                        // Check if label exists by name
+                        const existingLabel = db.prepare('SELECT id FROM labels WHERE name COLLATE NOCASE = ?').get(discogsData.label) as { id: number } | undefined;
 
-                        // Check if label exists
-                        const existingLabel = db.prepare('SELECT id FROM labels WHERE mbid = ? OR name = ?').get(labelPseudoMbid, discogsData.label) as { id: number } | undefined;
-
-                        if (!existingLabel) {
-                            db.prepare(`
-                                INSERT INTO labels (mbid, name, type, country, founded)
-                                VALUES (?, ?, 'Discogs', ?, NULL)
-                            `).run(labelPseudoMbid, discogsData.label, discogsData.country);
+                        if (existingLabel) {
+                            labelId = existingLabel.id;
+                        } else {
+                            const result = db.prepare(`
+                                INSERT INTO labels (name, type, country, data_source, external_id, enriched_at, enrichment_confidence)
+                                VALUES (?, 'Label', ?, 'discogs', ?, ?, 0.7)
+                            `).run(discogsData.label, discogsData.country, String(discogsData.discogsId), now);
+                            labelId = Number(result.lastInsertRowid);
                         }
-                        labelMbid = labelPseudoMbid;
                     }
 
-                    // Create release record if we have a Discogs ID
-                    if (discogsMbid) {
-                        const existingRelease = db.prepare('SELECT id FROM releases WHERE mbid = ?').get(discogsMbid) as { id: number } | undefined;
+                    // Create release record if we have a Discogs ID (no pseudo-MBID, use external_id)
+                    if (discogsData.discogsId) {
+                        // Check if release exists by external_id (Discogs) or by title+artist
+                        const existingRelease = db.prepare(`
+                            SELECT id FROM releases 
+                            WHERE (external_id = ? AND data_source = 'discogs')
+                            OR (title COLLATE NOCASE = ? AND artist_credit COLLATE NOCASE = ?)
+                        `).get(String(discogsData.discogsId), track.album, track.artist) as { id: number } | undefined;
 
-                        if (!existingRelease) {
-                            db.prepare(`
-                                INSERT INTO releases (mbid, title, artist_credit, release_date, country, label_mbid, status, primary_type)
-                                VALUES (?, ?, ?, ?, ?, ?, 'Official', 'Album')
+                        let releaseId: number;
+                        if (existingRelease) {
+                            releaseId = existingRelease.id;
+                        } else {
+                            // Insert with mbid=NULL, external_id=discogsId, data_source='discogs'
+                            const labelMbid = labelId ? db.prepare('SELECT mbid FROM labels WHERE id = ?').get(labelId) as { mbid: string | null } | undefined : null;
+                            const result = db.prepare(`
+                                INSERT INTO releases (mbid, title, artist_credit, release_date, country, label_mbid, status, primary_type, data_source, external_id, enriched_at, enrichment_confidence)
+                                VALUES (NULL, ?, ?, ?, ?, ?, 'Official', 'Album', 'discogs', ?, ?, 0.7)
                             `).run(
-                                discogsMbid,
                                 track.album,
                                 track.artist,
                                 discogsData.year ? String(discogsData.year) : null,
                                 discogsData.country,
-                                labelMbid
+                                labelMbid?.mbid || null,
+                                String(discogsData.discogsId),
+                                now
                             );
+                            releaseId = Number(result.lastInsertRowid);
                         }
 
-                        // Update track with release_mbid
+                        // Update track with data_source='discogs', external_id, NO release_mbid (keep NULL for non-MB)
                         db.prepare(`
                             UPDATE tracks SET
                                 genre = COALESCE(genre, ?),
                                 mood = COALESCE(mood, ?),
                                 year = COALESCE(year, ?),
-                                release_mbid = ?,
-                                enriched = 1
+                                data_source = 'discogs',
+                                external_id = ?,
+                                enriched = 1,
+                                enriched_at = ?
                             WHERE id = ?
-                        `).run(genre, styles, discogsData.year, discogsMbid, track.id);
+                        `).run(genre, styles, discogsData.year, String(discogsData.discogsId), now, track.id);
                     } else {
                         db.prepare(`
                             UPDATE tracks SET
                                 genre = COALESCE(genre, ?),
                                 mood = COALESCE(mood, ?),
                                 year = COALESCE(year, ?),
-                                enriched = 1
+                                data_source = 'discogs',
+                                enriched = 1,
+                                enriched_at = ?
                             WHERE id = ?
-                        `).run(genre, styles, discogsData.year, track.id);
+                        `).run(genre, styles, discogsData.year, now, track.id);
                     }
 
                     // Store styles as tags using proper tag_id reference
