@@ -83,6 +83,14 @@ addColumn('tracks', 'mbid', 'TEXT');
 addColumn('tracks', 'release_mbid', 'TEXT');
 addColumn('tracks', 'enriched', 'INTEGER');
 
+// AcoustID fingerprinting columns
+addColumn('tracks', 'fingerprint', 'TEXT');           // Chromaprint fingerprint
+addColumn('tracks', 'fingerprint_duration', 'INTEGER'); // Duration used for fingerprint
+
+// Review queue columns
+addColumn('tracks', 'needs_review', 'INTEGER DEFAULT 0'); // Flag for manual review
+addColumn('tracks', 'review_reason', 'TEXT');            // Why this track needs review
+
 // Create Credits Table
 db.exec(`
   CREATE TABLE IF NOT EXISTS credits (

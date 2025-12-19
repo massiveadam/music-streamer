@@ -8,6 +8,7 @@ import db from './db';
 import type { Track, Artist as ArtistType, Release, Credit, Label } from '../types';
 import * as lastfm from './lastfm';
 import * as discogs from './discogs';
+import * as normalization from './normalization';
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -340,6 +341,7 @@ export async function getWorkDetails(mbid: string): Promise<MBWork | null> {
  * Store or update an artist in the database
  * Checks by name first to prevent duplicates, then by mbid
  * Sets data_source tracking for metadata quality management
+ * Uses normalization for consistent artist names and sort names
  */
 export function upsertArtist(artistData: MBArtist | null): number | null {
     if (!artistData || !artistData.name) return null;
@@ -347,8 +349,14 @@ export function upsertArtist(artistData: MBArtist | null): number | null {
     const now = new Date().toISOString();
     const dataSource = artistData.id ? 'musicbrainz' : 'manual';
 
+    // Normalize the artist name and generate sort name
+    const normalizedName = normalization.normalizeArtistName(artistData.name);
+    const sortName = artistData['sort-name']
+        ? normalization.normalizeArtistName(artistData['sort-name'])
+        : normalization.generateSortName(normalizedName);
+
     // First check by name to avoid duplicates
-    const existingByName = db.prepare('SELECT id, mbid FROM artists WHERE name = ?').get(artistData.name) as { id: number; mbid: string | null } | undefined;
+    const existingByName = db.prepare('SELECT id, mbid FROM artists WHERE name = ?').get(normalizedName) as { id: number; mbid: string | null } | undefined;
 
     if (existingByName) {
         // Update with new data if we have more info (like mbid or description)
@@ -359,7 +367,7 @@ export function upsertArtist(artistData: MBArtist | null): number | null {
                 WHERE id = ?`)
                 .run(
                     artistData.id,
-                    artistData['sort-name'] || artistData.name,
+                    sortName,
                     artistData.disambiguation || null,
                     artistData.type || null,
                     artistData.country || null,
@@ -376,14 +384,14 @@ export function upsertArtist(artistData: MBArtist | null): number | null {
         if (existingByMbid) return existingByMbid.id;
     }
 
-    // Insert new artist with data source tracking
+    // Insert new artist with data source tracking and normalized names
     const result = db.prepare(`
         INSERT INTO artists (mbid, name, sort_name, disambiguation, type, country, data_source, enriched_at, enrichment_confidence)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
         artistData.id || null,
-        artistData.name,
-        artistData['sort-name'] || artistData.name,
+        normalizedName,
+        sortName,
         artistData.disambiguation || null,
         artistData.type || null,
         artistData.country || null,
@@ -397,33 +405,11 @@ export function upsertArtist(artistData: MBArtist | null): number | null {
 
 /**
  * Map MusicBrainz relation type to human-readable role
+ * Uses normalization module for canonical role names
  */
 function mapRelationType(type?: string): string {
-    const typeMap: Record<string, string> = {
-        'producer': 'Producer',
-        'engineer': 'Engineer',
-        'mix': 'Mixer',
-        'mastering': 'Mastering Engineer',
-        'recording': 'Recording Engineer',
-        'instrument': 'Performer',
-        'vocal': 'Vocals',
-        'performer': 'Performer',
-        'composer': 'Composer',
-        'lyricist': 'Lyricist',
-        'writer': 'Writer',
-        'arranger': 'Arranger',
-        'orchestrator': 'Orchestrator',
-        'conductor': 'Conductor',
-        'remixer': 'Remixer',
-        'programming': 'Programming',
-        'chorus master': 'Chorus Master',
-        'concertmaster': 'Concertmaster',
-        'instrumentator': 'Instrumentator',
-        'librettist': 'Librettist',
-        'translator': 'Translator'
-    };
-
-    return typeMap[type?.toLowerCase() || ''] || type || 'Contributor';
+    // Use the normalization module for canonical role mapping
+    return normalization.normalizeRole(type || 'Contributor');
 }
 
 /**
@@ -587,11 +573,15 @@ function storeEntityTags(entityType: string, entityId: number | null, tags: MBTa
     const sortedTags = tags.sort((a, b) => (b.count || 0) - (a.count || 0));
 
     for (const tag of sortedTags) {
-        // Insert tag if not exists
-        preparedStatements.insertTag.run(tag.name);
+        // Normalize tag name to canonical form before storing
+        const normalizedTagName = normalization.normalizeTag(tag.name);
+        if (!normalizedTagName) continue;
+
+        // Insert tag if not exists (using normalized name)
+        preparedStatements.insertTag.run(normalizedTagName);
 
         // Get tag ID (will exist after INSERT OR IGNORE)
-        const existingTag = preparedStatements.selectTag.get(tag.name) as { id: number } | undefined;
+        const existingTag = preparedStatements.selectTag.get(normalizedTagName) as { id: number } | undefined;
         if (!existingTag) continue;
 
         // Link tag to entity (ignore duplicates)

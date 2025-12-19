@@ -7,6 +7,7 @@
 
 import axios from 'axios';
 import { getSetting } from './db';
+import * as normalization from './normalization';
 
 const DISCOGS_API_BASE = 'https://api.discogs.com';
 const USER_AGENT = 'OpenStream/1.0 +https://github.com/openstream';
@@ -135,6 +136,7 @@ export async function getReleaseDetails(releaseId: number): Promise<DiscogsRelea
 
 /**
  * Extract metadata from Discogs release
+ * Normalizes genres and styles to canonical forms
  */
 export function extractMetadata(release: DiscogsRelease): {
     genres: string[];
@@ -143,9 +145,13 @@ export function extractMetadata(release: DiscogsRelease): {
     label: string | null;
     country: string | null;
 } {
+    // Normalize genres and styles using canonical mappings
+    const normalizedGenres = (release.genres || []).map(g => normalization.normalizeTag(g)).filter(Boolean);
+    const normalizedStyles = (release.styles || []).map(s => normalization.normalizeTag(s)).filter(Boolean);
+
     return {
-        genres: release.genres || [],
-        styles: release.styles || [], // These are like RYM descriptors
+        genres: normalizedGenres,
+        styles: normalizedStyles,
         year: release.year || null,
         label: release.labels?.[0]?.name || null,
         country: release.country || null
@@ -170,11 +176,11 @@ export async function getAlbumMetadata(artist: string, album: string): Promise<{
         return { found: false, genres: [], styles: [], year: null, label: null, country: null, discogsId: null };
     }
 
-    // Quick metadata from search result
+    // Quick metadata from search result (with normalized genres/styles)
     const quickMeta = {
         found: true,
-        genres: searchResult.genre || [],
-        styles: searchResult.style || [],
+        genres: (searchResult.genre || []).map(g => normalization.normalizeTag(g)).filter(Boolean),
+        styles: (searchResult.style || []).map(s => normalization.normalizeTag(s)).filter(Boolean),
         year: searchResult.year ? parseInt(searchResult.year) : null,
         label: searchResult.label?.[0] || null,
         country: searchResult.country || null,

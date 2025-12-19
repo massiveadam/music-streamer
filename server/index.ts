@@ -387,18 +387,20 @@ app.get('/api/settings/system', auth.authenticateToken, auth.requireAdmin, (req:
         lastfm_api_key: getSetting('lastfm_api_key') || '',
         lastfm_api_secret: getSetting('lastfm_api_secret') || '',
         discogs_consumer_key: getSetting('discogs_consumer_key') || '',
-        discogs_consumer_secret: getSetting('discogs_consumer_secret') || ''
+        discogs_consumer_secret: getSetting('discogs_consumer_secret') || '',
+        acoustid_api_key: getSetting('acoustid_api_key') || ''
     });
 });
 
 // Admin: Update System Settings
 app.put('/api/settings/system', auth.authenticateToken, auth.requireAdmin, (req: Request, res: Response) => {
-    const { lastfm_api_key, lastfm_api_secret, discogs_consumer_key, discogs_consumer_secret } = req.body;
+    const { lastfm_api_key, lastfm_api_secret, discogs_consumer_key, discogs_consumer_secret, acoustid_api_key } = req.body;
 
     if (lastfm_api_key !== undefined) setSetting('lastfm_api_key', lastfm_api_key);
     if (lastfm_api_secret !== undefined) setSetting('lastfm_api_secret', lastfm_api_secret);
     if (discogs_consumer_key !== undefined) setSetting('discogs_consumer_key', discogs_consumer_key);
     if (discogs_consumer_secret !== undefined) setSetting('discogs_consumer_secret', discogs_consumer_secret);
+    if (acoustid_api_key !== undefined) setSetting('acoustid_api_key', acoustid_api_key);
 
     res.json({ success: true });
 });
@@ -1632,6 +1634,162 @@ app.post('/api/album/cover-art', auth.authenticateToken, async (req: AuthRequest
     } catch (e) {
         console.error('Cover art update error:', e);
         res.status(500).json({ error: (e as Error).message });
+    }
+});
+
+// ========== ACOUSTID FINGERPRINTING ==========
+
+import * as acoustid from './acoustid';
+
+// Check if fpcalc is available
+app.get('/api/acoustid/status', async (_req: Request, res: Response) => {
+    const fpcalcInstalled = await acoustid.checkFpcalcInstalled();
+    const apiKey = getSetting('acoustid_api_key');
+
+    res.json({
+        fpcalcInstalled,
+        apiKeyConfigured: !!apiKey,
+        ready: fpcalcInstalled && !!apiKey
+    });
+});
+
+// Generate fingerprint for a single track
+app.post('/api/acoustid/fingerprint/:id', auth.authenticateToken, async (req: AuthRequest, res: Response) => {
+    const trackId = parseInt(req.params.id);
+    if (isNaN(trackId)) {
+        return res.status(400).json({ error: 'Invalid track ID' });
+    }
+
+    try {
+        const result = await acoustid.matchTrackByFingerprint(trackId);
+        res.json(result);
+    } catch (err) {
+        console.error('Fingerprint error:', err);
+        res.status(500).json({ error: (err as Error).message });
+    }
+});
+
+// Lookup by existing fingerprint (doesn't regenerate)
+app.get('/api/acoustid/lookup/:id', auth.authenticateToken, async (req: AuthRequest, res: Response) => {
+    const trackId = parseInt(req.params.id);
+    if (isNaN(trackId)) {
+        return res.status(400).json({ error: 'Invalid track ID' });
+    }
+
+    try {
+        const track = db.prepare('SELECT fingerprint, fingerprint_duration FROM tracks WHERE id = ?')
+            .get(trackId) as { fingerprint: string | null; fingerprint_duration: number | null } | undefined;
+
+        if (!track || !track.fingerprint || !track.fingerprint_duration) {
+            return res.status(404).json({ error: 'No fingerprint found for this track' });
+        }
+
+        const results = await acoustid.lookupByFingerprint(track.fingerprint, track.fingerprint_duration);
+        res.json({ results });
+    } catch (err) {
+        console.error('Lookup error:', err);
+        res.status(500).json({ error: (err as Error).message });
+    }
+});
+
+// Batch fingerprint unmatched tracks
+app.post('/api/acoustid/batch', auth.authenticateToken, auth.requireAdmin, async (req: AuthRequest, res: Response) => {
+    const limit = parseInt(req.body.limit as string) || 50;
+
+    try {
+        // Run in background
+        res.json({ message: `Started fingerprinting up to ${limit} tracks`, limit });
+
+        const result = await acoustid.batchMatchUnmatchedTracks(limit, (current, total, status) => {
+            console.log(`[AcoustID] ${current}/${total}: ${status}`);
+        });
+
+        console.log(`[AcoustID] Batch complete: ${result.matched}/${result.processed} matched`);
+    } catch (err) {
+        console.error('Batch fingerprint error:', err);
+    }
+});
+
+// ========== REVIEW QUEUE ==========
+
+// Get tracks that need manual review
+app.get('/api/review-queue', auth.authenticateToken, auth.requireAdmin, (req: AuthRequest, res: Response) => {
+    try {
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 50;
+        const offset = (page - 1) * limit;
+
+        const tracks = db.prepare(`
+            SELECT id, title, artist, album, review_reason, enrichment_confidence, mbid
+            FROM tracks 
+            WHERE needs_review = 1
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+        `).all(limit, offset) as any[];
+
+        const totalResult = db.prepare('SELECT COUNT(*) as total FROM tracks WHERE needs_review = 1')
+            .get() as { total: number };
+
+        res.json({
+            tracks,
+            pagination: {
+                page,
+                limit,
+                total: totalResult.total,
+                totalPages: Math.ceil(totalResult.total / limit)
+            }
+        });
+    } catch (err) {
+        console.error('Review queue error:', err);
+        res.status(500).json({ error: (err as Error).message });
+    }
+});
+
+// Resolve a review item
+app.post('/api/review-queue/:id/resolve', auth.authenticateToken, auth.requireAdmin, (req: AuthRequest, res: Response) => {
+    const trackId = parseInt(req.params.id);
+    const { action, mbid } = req.body;
+
+    if (!action || !['confirm', 'override', 'dismiss'].includes(action)) {
+        return res.status(400).json({ error: 'action must be confirm, override, or dismiss' });
+    }
+
+    try {
+        if (action === 'confirm') {
+            // Keep current match, clear review flag
+            db.prepare('UPDATE tracks SET needs_review = 0, review_reason = NULL WHERE id = ?').run(trackId);
+        } else if (action === 'override' && mbid) {
+            // Set new MBID and clear review
+            db.prepare(`
+                UPDATE tracks 
+                SET mbid = ?, needs_review = 0, review_reason = NULL, enrichment_confidence = 1.0 
+                WHERE id = ?
+            `).run(mbid, trackId);
+        } else if (action === 'dismiss') {
+            // Clear review without changing MBID
+            db.prepare('UPDATE tracks SET needs_review = 0, review_reason = ? WHERE id = ?')
+                .run('Dismissed by admin', trackId);
+        }
+
+        res.json({ success: true, action, trackId });
+    } catch (err) {
+        console.error('Resolve review error:', err);
+        res.status(500).json({ error: (err as Error).message });
+    }
+});
+
+// Flag a track for review manually
+app.post('/api/tracks/:id/flag-review', auth.authenticateToken, (req: AuthRequest, res: Response) => {
+    const trackId = parseInt(req.params.id);
+    const { reason } = req.body;
+
+    try {
+        db.prepare('UPDATE tracks SET needs_review = 1, review_reason = ? WHERE id = ?')
+            .run(reason || 'Flagged by user', trackId);
+
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
     }
 });
 
