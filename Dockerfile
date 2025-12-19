@@ -52,12 +52,13 @@ FROM node:20-slim
 
 WORKDIR /app/server
 
-# Install runtime dependencies for better-sqlite3
+# Install runtime dependencies for better-sqlite3 and audio processing
 RUN apt-get update && apt-get install -y \
     python3 \
     make \
     g++ \
     ffmpeg \
+    libchromaprint-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy from builder
