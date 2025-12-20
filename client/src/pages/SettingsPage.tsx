@@ -30,7 +30,7 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
     const [usersList, setUsersList] = useState<any[]>([]);
 
     // System Settings (Admin)
-    const [systemSettings, setSystemSettings] = useState({ lastfm_api_key: '', lastfm_api_secret: '', discogs_consumer_key: '', discogs_consumer_secret: '' });
+    const [systemSettings, setSystemSettings] = useState({ lastfm_api_key: '', lastfm_api_secret: '', discogs_consumer_key: '', discogs_consumer_secret: '', acoustid_api_key: '' });
     const [publicLastFmKey, setPublicLastFmKey] = useState<string>('');
 
     // Audio Analysis State
@@ -373,6 +373,24 @@ export default function SettingsPage({ theme, setTheme, setShowScanOverlay }: Se
                                             placeholder="Enter your Discogs Consumer Secret"
                                         />
                                     </div>
+                                </div>
+                            </div>
+
+                            {/* AcoustID Settings */}
+                            <div className="border-t border-app-bg pt-4 mt-4">
+                                <h4 className="text-sm font-medium text-app-text-muted mb-3">AcoustID (Audio Fingerprinting)</h4>
+                                <div>
+                                    <label className="block text-sm font-medium text-app-text mb-2">AcoustID API Key</label>
+                                    <input
+                                        type="text"
+                                        value={systemSettings.acoustid_api_key}
+                                        onChange={e => setSystemSettings({ ...systemSettings, acoustid_api_key: e.target.value })}
+                                        className="w-full bg-app-bg border border-app-surface focus:border-app-accent rounded-lg px-4 py-3 text-app-text outline-none transition-colors"
+                                        placeholder="Enter your AcoustID API Key"
+                                    />
+                                    <p className="text-xs text-app-text-muted mt-1">
+                                        Get a free key at <a href="https://acoustid.org/" target="_blank" rel="noopener" className="text-app-accent hover:underline">acoustid.org</a>
+                                    </p>
                                 </div>
                             </div>
                             <button
